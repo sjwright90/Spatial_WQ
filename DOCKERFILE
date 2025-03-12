@@ -1,4 +1,4 @@
-FROM python:3.11   
+FROM python:3.11
 
 # Create a directory and copy all the files into it
 RUN mkdir /app
