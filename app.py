@@ -1,45 +1,30 @@
 # %%
 import io
 import json
-from typing import Type, Tuple
+
+# from typing import Type, Tuple
 import json
 
 import dash
 from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
 from dash import html, dcc
-from flask_caching import Cache
 from flask import Flask
 
 import pandas as pd
 
 from src.plotting import make_map
 from src.data_manager import DataPreprocessor, DataPlotter
-from src.data_process import subset_df_locIds, subset_df_numericFeatures
-from src.compositional_data_functions import clr_transform_scale
-from src.dimension_reduction_functions import run_pca, run_pmap
-from src.callbacks import callback_prevent_initial_output
-from src.cache_initialize import get_resource_path
 
-# map size
-fig_height_px_map = 700
-fig_width_px_map = 700
+# from src.data_process import subset_df_locIds, subset_df_numericFeatures
+# from src.compositional_data_functions import clr_transform_scale
+from src.dimension_reduction_functions import process_dimension_reduction
+from src.callbacks import callback_prevent_initial_output
+
 
 # define the Flask server
 server = Flask(__name__)
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP])
-# app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-# server = app.server
-
-# CACHE_CONFIG = {
-#     "CACHE_TYPE": "filesystem",
-#     "CACHE_DIR": get_resource_path("cache-directory"),
-#     "CACHE_THRESHOLD": 100,
-#     "CACHE_DEFAULT_TIMEOUT": 60 * 60,
-# }
-
-# cache = Cache()
-# cache.init_app(app.server, config=CACHE_CONFIG)
 
 app.layout = html.Div(
     children=[
@@ -154,24 +139,24 @@ def update_map(meta_data):
 # function to run the CLR transformation and dimension reduction
 # @cache.memoize(make_cache_key=make_custom_cache_key_dimensionReduction)
 # no need to memoize, only runs from user request
-def process_dimension_reduction(
-    df,
-    col_loc_id,
-    cols_meta,
-    cols_numeric_simple,
-    cols_numeric_clr,
-    feature_selection,
-    loc_id_selection,
-    n_neighbors,
-) -> Type[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
-    df = subset_df_locIds(df, col_loc_id, loc_id_selection)
-    df, cols_numeric_all, cols_numeric_clr = subset_df_numericFeatures(
-        df, cols_numeric_simple, cols_numeric_clr, feature_selection
-    )
-    df_clr = clr_transform_scale(df, cols_numeric_all, cols_numeric_clr)
-    df_plot_pca, ldg_df, expl_var = run_pca(df_clr, cols_meta, cols_numeric_all)
-    df_plot_pmap = run_pmap(df_clr, cols_meta, cols_numeric_all, n_neighbors)
-    return (df_plot_pca, ldg_df, expl_var), df_plot_pmap
+# def process_dimension_reduction(
+#     df,
+#     col_loc_id,
+#     cols_meta,
+#     cols_numeric_simple,
+#     cols_numeric_clr,
+#     feature_selection,
+#     loc_id_selection,
+#     n_neighbors,
+# ) -> Type[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
+#     df = subset_df_locIds(df, col_loc_id, loc_id_selection)
+#     df, cols_numeric_all, cols_numeric_clr = subset_df_numericFeatures(
+#         df, cols_numeric_simple, cols_numeric_clr, feature_selection
+#     )
+#     df_clr = clr_transform_scale(df, cols_numeric_all, cols_numeric_clr)
+#     df_plot_pca, ldg_df, expl_var = run_pca(df_clr, cols_meta, cols_numeric_all)
+#     df_plot_pmap = run_pmap(df_clr, cols_meta, cols_numeric_all, n_neighbors)
+#     return (df_plot_pca, ldg_df, expl_var), df_plot_pmap
 
 
 # process_dimension_reduction.make_cache_key = make_custom_cache_key_dimensionReduction
@@ -245,17 +230,21 @@ def process_working_data(
         Input("working-data", "data"),
         Input("map", "selectedData"),
     ],
-    [State("meta-data", "data")],
+    [
+        State(component_id="meta-data", component_property="data"),
+        State(component_id="pmap-neighbors", component_property="value"),
+    ],
     prevent_initial_call=True,
 )
 # @callback_prevent_initial_output  # this is stopping the plots from updating when deselect all
-def plot_data(working_data, selectedData, meta_data):
+def plot_data(working_data, selectedData, meta_data, n_neighbors):
     data_plotter = DataPlotter(working_data, meta_data, selectedData)
     fig_pca = data_plotter.plot_pca()
-    fig_pmap = data_plotter.plot_pmap()
+    fig_pmap = data_plotter.plot_pmap(n_neighbors=n_neighbors)
     return fig_pca, fig_pmap
 
 
 port = str(8080)
 if __name__ == "__main__":
-    app.run(debug=False, port=port)
+    # app.run(debug=False, port=port)
+    app.run_server(debug=True, port=port)

@@ -19,7 +19,7 @@ from pandas import DataFrame
 def get_key_cols_meta(df):
     col_loc_id = df.filter(regex=r"^LOCATION-ID_").columns.to_list()[0]
     col_map_group = df.filter(regex=r"^MAP-GROUPS-DOMAIN_").columns.to_list()[0]
-    col_plot_groups = df.filter(regex=r"^PLOT-GROUPS-DOMAIN_").columns.to_list()
+    col_plot_groups = df.filter(regex=r"^PLOT-GROUPS-DOMAIN-1_").columns.to_list()[0]
     col_long_lat = ["LONGITUDE", "LATITUDE"]
     return col_loc_id, col_map_group, col_plot_groups, col_long_lat
 

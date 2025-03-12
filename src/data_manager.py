@@ -44,6 +44,7 @@ class DataPreprocessor:
         self.df_master = self.df_master[
             self.cols_key_plot["meta"] + self.cols_key_plot["numeric_all"]
         ].copy()
+
         self.cols_key_meta = dict(
             zip(
                 ["loc_id", "map_group", "plot_group", "long_lat"],
@@ -156,12 +157,15 @@ class DataPlotter:
         self.ldg_df = pd.read_json(io.StringIO(self.working_data["ldg_df"]))
         self.expl_var = self.working_data["expl_var"]
 
-    def plot_pmap(self):
+    def plot_pmap(self, n_neighbors):
         return make_fig_pmap(
             self.df_plot_pmap,
             self.dict_color_map,
             self.dict_marker_map,
             self.cols_key_meta["loc_id"],
+            self.cols_key_meta["map_group"],
+            self.cols_key_meta["plot_group"],
+            n_neighbors,  # DONTFORGET
         )
 
     def plot_pca(self):
@@ -172,4 +176,6 @@ class DataPlotter:
             self.dict_color_map,
             self.dict_marker_map,
             self.cols_key_meta["loc_id"],
+            self.cols_key_meta["map_group"],
+            self.cols_key_meta["plot_group"],
         )

@@ -2,7 +2,14 @@ from pandas import DataFrame
 from sklearn.decomposition import PCA
 import pacmap
 
-from .data_process import make_df_for_biplot
+from typing import Type, Tuple
+
+from .data_process import (
+    make_df_for_biplot,
+    subset_df_locIds,
+    subset_df_numericFeatures,
+)
+from .compositional_data_functions import clr_transform_scale
 
 
 # cache function for PCA
@@ -138,3 +145,23 @@ def loading_matrix(pca_obj, labels_list):
     # add metals to data frame
     ld_mat["metals"] = labels_list
     return ld_mat
+
+
+def process_dimension_reduction(
+    df,
+    col_loc_id,
+    cols_meta,
+    cols_numeric_simple,
+    cols_numeric_clr,
+    feature_selection,
+    loc_id_selection,
+    n_neighbors,
+) -> Type[Tuple[DataFrame, DataFrame, DataFrame]]:
+    df = subset_df_locIds(df, col_loc_id, loc_id_selection)
+    df, cols_numeric_all, cols_numeric_clr = subset_df_numericFeatures(
+        df, cols_numeric_simple, cols_numeric_clr, feature_selection
+    )
+    df_clr = clr_transform_scale(df, cols_numeric_all, cols_numeric_clr)
+    df_plot_pca, ldg_df, expl_var = run_pca(df_clr, cols_meta, cols_numeric_all)
+    df_plot_pmap = run_pmap(df_clr, cols_meta, cols_numeric_all, n_neighbors)
+    return (df_plot_pca, ldg_df, expl_var), df_plot_pmap
