@@ -215,7 +215,7 @@ def plot_data(working_data, selectedData, meta_data, n_neighbors):
     return fig_pca, fig_pmap
 
 
-port = str(8050)
-if __name__ == "__main__":
-    # app.run(debug=False, port=port)
-    app.run_server(debug=True, port=port)
+# TURN OFF FOR DEPLOYMENT WITH GUNICORN
+# port = str(8050)
+# if __name__ == "__main__":
+#     app.run_server(debug=False, port=port)
