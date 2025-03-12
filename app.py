@@ -2,9 +2,6 @@
 import io
 import json
 
-# from typing import Type, Tuple
-import json
-
 import dash
 from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
