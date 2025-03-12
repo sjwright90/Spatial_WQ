@@ -10,6 +10,9 @@ RUN apt-get update
 
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
+# Show gunicorn version
+RUN pip show gunicorn
+RUN gunicorn --version
 # Expose the port
 EXPOSE 8050
-CMD ["gunicorn", "app:server", "-b", "0.0.0.0:8050"] #run gunicorn to create a production server
+CMD ["gunicorn", "app:server", "-b", "0.0.0.0:8050"]
