@@ -79,7 +79,6 @@ app.layout = html.Div(
     ],
 )
 
-
 # IMPORT DATA FROM .CSV
 @app.callback(
     Output("master-data", "data"),
@@ -119,6 +118,8 @@ def process_data(contents):
 )
 @callback_prevent_initial_output
 def update_map(meta_data):
+    print("Updating map")
+    print(meta_data)
     meta_data = json.loads(meta_data)
 
     df_coords = pd.read_json(io.StringIO(meta_data["df_coordinate"]))

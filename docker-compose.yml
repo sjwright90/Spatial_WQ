@@ -1,0 +1,19 @@
+services:
+  app:
+      build: .
+      container_name: dash_gunicorn
+      restart: always
+      networks:
+        - webnet
+  nginx:
+    build: ./nginx
+    container_name: nginx_proxy
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - app
+    networks:
+      - webnet
+networks:
+  webnet:
