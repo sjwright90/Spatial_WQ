@@ -53,6 +53,13 @@ app.layout = html.Div(
         ),
         html.Div(
             children=[
+                html.Button(
+                    "Grab map select for PCA/PacMAP", id="map-selected-snapshot"
+                )
+            ]
+        ),
+        html.Div(
+            children=[
                 html.Button("Apply", id="apply-button"),
                 dcc.Dropdown(
                     id="pmap-neighbors",
@@ -87,9 +94,10 @@ app.layout = html.Div(
     Output("data-hash", "data"),
     Output("feature-selection-dropdown", "options"),
     Output("feature-selection-dropdown", "value"),
-    Output("loc-id-dropdown", "options"),
-    Output("loc-id-dropdown", "value"),
+    Output("loc-id-dropdown", "options", allow_duplicate=True),
+    Output("loc-id-dropdown", "value", allow_duplicate=True),
     Input("upload-data", "contents"),
+    prevent_initial_call=True,
 )
 def process_data(contents):
     if contents is None:
@@ -189,6 +197,24 @@ def process_working_data(
     return json.dumps(dict_working_data)
 
 
+# grab the selected data from the map and update the loc_id-dropdown
+@app.callback(
+    Output("loc-id-dropdown", "value", allow_duplicate=True),
+    Input("map-selected-snapshot", "n_clicks"),
+    State("map", "selectedData"),
+    State("meta-data", "data"),
+    prevent_initial_call=True,
+)
+def update_loc_id_dropdown(n_clicks, selectedData, meta_data):
+    if selectedData is None:
+        if meta_data is None:
+            return []
+        meta_data = json.loads(meta_data)
+        return meta_data["loc_id_all"]
+    selected_loc_ids = [point["customdata"][0] for point in selectedData["points"]]
+    return selected_loc_ids
+
+
 # plotting callbacks
 @app.callback(
     [
@@ -207,6 +233,8 @@ def process_working_data(
 )
 # @callback_prevent_initial_output  # this is stopping the plots from updating when deselect all
 def plot_data(working_data, selectedData, meta_data, n_neighbors):
+    if working_data is None:
+        return DataPlotter.empty_figs()
     data_plotter = DataPlotter(working_data, meta_data, selectedData)
     fig_pca = data_plotter.plot_pca()
     fig_pmap = data_plotter.plot_pmap(n_neighbors=n_neighbors)
@@ -214,6 +242,6 @@ def plot_data(working_data, selectedData, meta_data, n_neighbors):
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-# port = str(8050)
-# if __name__ == "__main__":
-#     app.run_server(debug=False, port=port)
+port = str(8050)
+if __name__ == "__main__":
+    app.run_server(debug=False, port=port)

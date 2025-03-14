@@ -13,7 +13,8 @@
 #
 
 from typing import List, Tuple
-from pandas import DataFrame
+from pandas import DataFrame, read_json
+import io
 
 
 def get_key_cols_meta(df):
@@ -88,6 +89,10 @@ def subset_df_numericFeatures(
         _cols_numeric_all_subset,
         _cols_numeric_clr_subset,
     )
+
+
+def json_to_pandas(json_dict, key):
+    return read_json(io.StringIO(json_dict[key]))
 
 
 def pc_scaler(series):

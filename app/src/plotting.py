@@ -17,6 +17,10 @@ size_line_2 = 0.2
 # secondary_domain = "PLOT-GROUPS-DOMAIN-1_secondary_domain"
 
 
+def empty_fig():
+    return go.Figure()
+
+
 def make_map(df, **kwargs):
     _kwargs = {
         "lat": "LATITUDE",

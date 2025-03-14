@@ -1,4 +1,4 @@
-from .plotting import make_fig_pca, make_fig_pmap
+from .plotting import make_fig_pca, make_fig_pmap, empty_fig
 from .data_process import (
     get_key_cols_plot,
     extract_color_dict,
@@ -6,6 +6,8 @@ from .data_process import (
     get_key_cols_meta,
     extract_coordinate_dataframe,
     rename_cols_analyte,
+    subset_df_locIds,
+    json_to_pandas,
 )
 
 from .cache_initialize import generate_df_hash_version
@@ -105,57 +107,45 @@ class DataPlotter:
         meta_data,
         selected_loc_ids,
     ):
-        self.working_data = json.loads(working_data)
-        self.meta_data = json.loads(meta_data)
+        self.initialize_data(working_data, meta_data, selected_loc_ids)
 
-        # load the meta data
-        self.cols_key_plot = self.meta_data["cols_key_plot"]
-        self.cols_key_meta = self.meta_data["cols_key_meta"]
-        self.dict_color_map = self.meta_data["dict_color_map"]
-        self.dict_marker_map = self.meta_data["dict_marker_map"]
+    def initialize_data(self, working_data, meta_data, selected_loc_ids):
+        try:
+            self.working_data = json.loads(working_data)
+            self.meta_data = json.loads(meta_data)
+            self.cols_key_plot = self.meta_data["cols_key_plot"]
+            self.cols_key_meta = self.meta_data["cols_key_meta"]
+            self.dict_color_map = self.meta_data["dict_color_map"]
+            self.dict_marker_map = self.meta_data["dict_marker_map"]
+            self.load_dataframes(selected_loc_ids)
+            self.ldg_df = pd.read_json(io.StringIO(self.working_data["ldg_df"]))
+            self.expl_var = self.working_data["expl_var"]
+        except Exception as e:
+            print(f"Error in initialize_data: {e}")
+            # logging.error(f"Error in initialize_data: {e}")
 
-        # load the dataframes and subset if necessary
-        if not selected_loc_ids is None:
-            selected_loc_ids = [
+    def load_dataframes(self, selected_loc_ids):
+        self.df_plot_pca = json_to_pandas(self.working_data, "df_plot_pca")
+        self.df_plot_pmap = json_to_pandas(self.working_data, "df_plot_pmap")
+        if selected_loc_ids is not None:
+            self.selected_loc_ids = [
                 point["customdata"][0] for point in selected_loc_ids["points"]
             ]
-            self.df_plot_pca = pd.read_json(
-                io.StringIO(self.working_data["df_plot_pca"])
-            )
-            self.df_plot_pca = (
-                self.df_plot_pca[
-                    self.df_plot_pca[self.cols_key_meta["loc_id"]].isin(
-                        selected_loc_ids
-                    )
-                ]
-                .copy()
-                .reset_index(drop=True)
-            )
-
-            self.df_plot_pmap = pd.read_json(
-                io.StringIO(self.working_data["df_plot_pmap"])
-            )
-
-            self.df_plot_pmap = (
-                self.df_plot_pmap[
-                    self.df_plot_pmap[self.cols_key_meta["loc_id"]].isin(
-                        selected_loc_ids
-                    )
-                ]
-                .copy()
-                .reset_index(drop=True)
-            )
+            self.df_plot_pca = self._subset_df_locIds(self.df_plot_pca)
+            self.df_plot_pmap = self._subset_df_locIds(self.df_plot_pmap)
         else:
-            self.df_plot_pca = pd.read_json(
-                io.StringIO(self.working_data["df_plot_pca"])
-            )
-            self.df_plot_pmap = pd.read_json(
-                io.StringIO(self.working_data["df_plot_pmap"])
-            )
+            self.selected_loc_ids = self.meta_data["loc_id_all"]
 
-        # load the additional PCA plotting data
-        self.ldg_df = pd.read_json(io.StringIO(self.working_data["ldg_df"]))
-        self.expl_var = self.working_data["expl_var"]
+    def _subset_df_locIds(self, df):
+        return subset_df_locIds(
+            df,
+            self.cols_key_meta["loc_id"],
+            self.selected_loc_ids,
+        ).reset_index(drop=True)
+
+    @staticmethod
+    def empty_figs():
+        return empty_fig(), empty_fig()
 
     def plot_pmap(self, n_neighbors):
         return make_fig_pmap(
@@ -165,7 +155,7 @@ class DataPlotter:
             self.cols_key_meta["loc_id"],
             self.cols_key_meta["map_group"],
             self.cols_key_meta["plot_group"],
-            n_neighbors,  # DONTFORGET
+            n_neighbors,
         )
 
     def plot_pca(self):
