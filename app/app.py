@@ -79,6 +79,7 @@ app.layout = html.Div(
     ],
 )
 
+
 # IMPORT DATA FROM .CSV
 @app.callback(
     Output("master-data", "data"),
@@ -118,8 +119,6 @@ def process_data(contents):
 )
 @callback_prevent_initial_output
 def update_map(meta_data):
-    print("Updating map")
-    print(meta_data)
     meta_data = json.loads(meta_data)
 
     df_coords = pd.read_json(io.StringIO(meta_data["df_coordinate"]))
@@ -162,8 +161,6 @@ def process_working_data(
         return None
     # if feature_selection or loc_id_selection is not populated, prevent update
     if not feature_selection or not loc_id_selection:
-        # print to console
-        print("Feature or loc ID not populated")
         return None
     df_master = pd.read_json(io.StringIO(json.loads(master_data)["df_master"]))
     meta_data = json.loads(meta_data)
