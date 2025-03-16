@@ -18,73 +18,75 @@ from src.data_manager import DataPreprocessor, DataPlotter
 from src.dimension_reduction_functions import process_dimension_reduction
 from src.callbacks import callback_prevent_initial_output
 
+from pages.home import create_page_map
 
 # define the Flask server
 server = Flask(__name__)
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-app.layout = html.Div(
-    children=[
-        dcc.Store(id="data-hash"),
-        dcc.Store(id="master-data"),
-        dcc.Store(id="meta-data"),
-        dcc.Store(id="working-data"),
-        html.Div(
-            children=[
-                dcc.Upload(
-                    id="upload-data",
-                    children=html.Button("Upload File"),
-                    multiple=False,
-                ),
-            ],
-            className="d-flex justify-content-center",
-            style={"padding-bottom": "10px"},
-        ),
-        html.Div(
-            children=[
-                dcc.Graph(
-                    id="map",
-                    config={"scrollZoom": True, "displayModeBar": True},
-                ),
-                dcc.Graph(id="pmap-plot"),
-                dcc.Graph(id="pca-plot"),
-            ],
-            className="d-flex flex-row",
-        ),
-        html.Div(
-            children=[
-                html.Button(
-                    "Grab map select for PCA/PacMAP", id="map-selected-snapshot"
-                )
-            ]
-        ),
-        html.Div(
-            children=[
-                html.Button("Apply", id="apply-button"),
-                dcc.Dropdown(
-                    id="pmap-neighbors",
-                    options=[{"label": i, "value": i} for i in range(10, 151, 5)],
-                    value=15,
-                ),
-                dcc.Dropdown(
-                    id="loc-id-dropdown",
-                    options=[],
-                    value=[],
-                    multi=True,
-                ),
-                dcc.Dropdown(
-                    id="feature-selection-dropdown",
-                    options=[],
-                    value=[],
-                    multi=True,
-                    style={"flex-grow": 1},
-                ),
-            ],
-            className="d-flex flex-row",
-            style={"min-width": "100%"},
-        ),
-    ],
-)
+app.layout = create_page_map()
+# app.layout = html.Div(
+#     children=[
+#         dcc.Store(id="data-hash"),
+#         dcc.Store(id="master-data"),
+#         dcc.Store(id="meta-data"),
+#         dcc.Store(id="working-data"),
+#         html.Div(
+#             children=[
+#                 dcc.Upload(
+#                     id="upload-data",
+#                     children=html.Button("Upload File"),
+#                     multiple=False,
+#                 ),
+#             ],
+#             className="d-flex justify-content-center",
+#             style={"padding-bottom": "10px"},
+#         ),
+#         html.Div(
+#             children=[
+#                 dcc.Graph(
+#                     id="map",
+#                     config={"scrollZoom": True, "displayModeBar": True},
+#                 ),
+#                 dcc.Graph(id="pmap-plot"),
+#                 dcc.Graph(id="pca-plot"),
+#             ],
+#             className="d-flex flex-row",
+#         ),
+#         html.Div(
+#             children=[
+#                 html.Button(
+#                     "Grab map select for PCA/PacMAP", id="map-selected-snapshot"
+#                 )
+#             ]
+#         ),
+#         html.Div(
+#             children=[
+#                 html.Button("Apply", id="apply-button"),
+#                 dcc.Dropdown(
+#                     id="pmap-neighbors",
+#                     options=[{"label": i, "value": i} for i in range(10, 151, 5)],
+#                     value=15,
+#                 ),
+#                 dcc.Dropdown(
+#                     id="loc-id-dropdown",
+#                     options=[],
+#                     value=[],
+#                     multi=True,
+#                 ),
+#                 dcc.Dropdown(
+#                     id="feature-selection-dropdown",
+#                     options=[],
+#                     value=[],
+#                     multi=True,
+#                     style={"flex-grow": 1},
+#                 ),
+#             ],
+#             className="d-flex flex-row",
+#             style={"min-width": "100%"},
+#         ),
+#     ],
+# )
 
 
 # IMPORT DATA FROM .CSV
@@ -242,6 +244,6 @@ def plot_data(working_data, selectedData, meta_data, n_neighbors):
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-port = str(8050)
-if __name__ == "__main__":
-    app.run_server(debug=False, port=port)
+# port = str(8050)
+# if __name__ == "__main__":
+#     app.run_server(debug=False, port=port)
