@@ -1,12 +1,17 @@
 services:
   app:
-      build: .
-      container_name: dash_gunicorn
-      restart: always
-      networks:
-        - webnet
+    image: sjwright90/dash-spatial-app:0.1.0
+      # build: .
+    container_name: dash_gunicorn
+    restart: always
+    networks:
+      - webnet
   nginx:
-    build: ./nginx
+    image: nginx:latest
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      # - ./nginx/ssl:/etc/nginx/ssl
     container_name: nginx_proxy
     restart: always
     ports:

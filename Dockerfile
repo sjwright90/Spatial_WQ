@@ -17,5 +17,5 @@ RUN apt-get update
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 # Expose the port
-EXPOSE 8050
-CMD ["gunicorn", "--workers=3", "-b", "0.0.0.0:8050", "app:server"]
+EXPOSE 8080
+CMD ["gunicorn", "--workers=3", "-b", "0.0.0.0:8080", "app:server"]
