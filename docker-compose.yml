@@ -1,7 +1,7 @@
 services:
   app:
-    image: sjwright90/dash-spatial-app:0.1.0
-      # build: .
+    # image: sjwright90/dash-spatial-app:latest
+    build: .
     container_name: dash_gunicorn
     restart: always
     networks:

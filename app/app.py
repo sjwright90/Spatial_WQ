@@ -112,8 +112,8 @@ def update_date_range_slider(master_data, meta_data):
     df_master = json_to_pandas(
         master_data, "df_master", meta_data["cols_key_meta"]["date"]
     )
-    date_min = df_master[meta_data["cols_key_meta"]["date"]].dt.year.min()
-    date_max = df_master[meta_data["cols_key_meta"]["date"]].dt.year.max()
+    date_min = int(df_master[meta_data["cols_key_meta"]["date"]].dt.year.min())
+    date_max = int(df_master[meta_data["cols_key_meta"]["date"]].dt.year.max())
     marks = {i: str(i) for i in range(date_min, date_max + 1, 5)}
     marks[date_max] = str(date_max)
     return date_min, date_max, marks, [date_min, date_max]
@@ -287,26 +287,9 @@ def plot_data(
     meta_data,
     n_neighbors,
 ):
-    # ctx = dash.callback_context
-    # if not ctx.triggered:
-    #     return DataPlotter.empty_figs()
-    # trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    # print(trigger_id)
+
     if working_data is None:
         return DataPlotter.empty_figs()
-    if plot_group_1 == "DATETIME" or plot_group_2 == "DATETIME":
-        plot_group_1 = "DATETIME"
-        plot_group_2 = "DATETIME"
-        notification = dbc.Toast(
-            "Datetime will be used for both plotting groups",
-            id="auto-toast",
-            header="Invalid Plotting Group",
-            is_open=True,
-            dismissable=True,
-            icon="warning",
-            duration=4000,
-            style={"position": "fixed", "top": 66, "right": 10, "width": 350},
-        )
 
     data_plotter = DataPlotter(
         working_data,
@@ -322,6 +305,6 @@ def plot_data(
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-port = 8050
-if __name__ == "__main__":
-    app.run_server(debug=False, port=port)
+# port = 8050
+# if __name__ == "__main__":
+#     app.run_server(debug=False, port=port)
