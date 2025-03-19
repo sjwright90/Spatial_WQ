@@ -1,12 +1,16 @@
 from .plotting import make_fig_pca, make_fig_pmap, empty_fig
 from .data_process import (
     get_key_cols_plot,
+    set_key_col_date,
     extract_color_dict,
     extract_marker_dict,
     get_key_cols_meta,
+    make_color_dict_date,
+    make_plotting_group_color_dicts,
     extract_coordinate_dataframe,
     rename_cols_analyte,
     subset_df_locIds,
+    pandas_to_json,
     json_to_pandas,
 )
 
@@ -17,6 +21,8 @@ import pandas as pd
 import base64
 import io
 import json
+
+from datetime import datetime
 
 
 class DataPreprocessor:
@@ -43,50 +49,75 @@ class DataPreprocessor:
         self.cols_key_plot["numeric_all"] = cols_key_plot_new[0]
         self.cols_key_plot["numeric_simple"] = cols_key_plot_new[1]
         self.cols_key_plot["numeric_clr"] = cols_key_plot_new[2]
+
+        self.cols_key_meta = dict(
+            zip(
+                [
+                    "loc_id",
+                    "date",
+                    "plotting_groups",
+                    "long_lat",
+                ],
+                get_key_cols_meta(self.df_master),
+            )
+        )
+        self.df_master = set_key_col_date(
+            self.df_master,
+            self.cols_key_meta["date"],
+        )
+
         self.df_master = self.df_master[
             self.cols_key_plot["meta"] + self.cols_key_plot["numeric_all"]
         ].copy()
 
-        self.cols_key_meta = dict(
-            zip(
-                ["loc_id", "map_group", "plot_group", "long_lat"],
-                get_key_cols_meta(self.df_master),
-            )
-        )
+        self.df_master = self.df_master.sort_values(
+            by=[
+                *self.cols_key_meta["plotting_groups"],
+                self.cols_key_meta["loc_id"],
+            ]
+        ).reset_index(drop=True)
+
         self.df_coordinate = extract_coordinate_dataframe(
             self.df_master,
-            self.cols_key_meta["map_group"],
+            self.cols_key_meta["plotting_groups"],
             self.cols_key_meta["loc_id"],
             self.cols_key_meta["long_lat"][0],
             self.cols_key_meta["long_lat"][1],
         )
-        self.dict_color_map = extract_color_dict(
-            self.df_master,
-            self.cols_key_meta["map_group"],
-            "COLORS-ALL-DOMAIN",
-        )
+
         self.dict_marker_map = extract_marker_dict(
             self.df_master,
             self.cols_key_meta["loc_id"],
             "MARKERS-PLOT-DOMAIN",
         )
 
+        self.dict_generic_colors = make_plotting_group_color_dicts(
+            self.df_master,
+            self.cols_key_meta["plotting_groups"],
+            # col_date=self.cols_key_meta["date"],
+        )
+
         self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
         self.cols_numeric_all = self.cols_key_plot["numeric_all"]
 
     def generate_dict_data_structure(self):
+
         return (
             json.dumps(
                 {
-                    "df_master": self.df_master.to_json(),
+                    # "df_master": self.df_master.to_json(),
+                    "df_master": pandas_to_json(
+                        self.df_master, self.cols_key_meta["date"]
+                    ),
                 }
             ),
             json.dumps(
                 {
                     "cols_key_plot": self.cols_key_plot,
                     "cols_key_meta": self.cols_key_meta,
-                    "dict_color_map": self.dict_color_map,
+                    # "dict_color_map": self.dict_color_map,
                     "dict_marker_map": self.dict_marker_map,
+                    "dict_generic_colors": self.dict_generic_colors,
                     "loc_id_all": self.loc_id_all,
                     "cols_numeric_all": self.cols_numeric_all,
                     "df_coordinate": self.df_coordinate.to_json(),
@@ -106,27 +137,50 @@ class DataPlotter:
         working_data,
         meta_data,
         selected_loc_ids,
+        plot_groups,
+        date_step,
+        date_range,
     ):
-        self.initialize_data(working_data, meta_data, selected_loc_ids)
+        self.initialize_data(
+            working_data,
+            meta_data,
+            selected_loc_ids,
+            plot_groups,
+            date_step,
+            date_range,
+        )
 
-    def initialize_data(self, working_data, meta_data, selected_loc_ids):
+    def initialize_data(
+        self,
+        working_data,
+        meta_data,
+        selected_loc_ids,
+        plot_groups,
+        date_step,
+        date_range,
+    ):
         try:
             self.working_data = json.loads(working_data)
             self.meta_data = json.loads(meta_data)
             self.cols_key_plot = self.meta_data["cols_key_plot"]
             self.cols_key_meta = self.meta_data["cols_key_meta"]
-            self.dict_color_map = self.meta_data["dict_color_map"]
             self.dict_marker_map = self.meta_data["dict_marker_map"]
             self.load_dataframes(selected_loc_ids)
+            self.df_between_dates(date_range)
             self.ldg_df = pd.read_json(io.StringIO(self.working_data["ldg_df"]))
             self.expl_var = self.working_data["expl_var"]
+            self.process_plot_groups(plot_groups, date_step)
         except Exception as e:
             print(f"Error in initialize_data: {e}")
             # logging.error(f"Error in initialize_data: {e}")
 
     def load_dataframes(self, selected_loc_ids):
-        self.df_plot_pca = json_to_pandas(self.working_data, "df_plot_pca")
-        self.df_plot_pmap = json_to_pandas(self.working_data, "df_plot_pmap")
+        self.df_plot_pca = json_to_pandas(
+            self.working_data, "df_plot_pca", self.meta_data["cols_key_meta"]["date"]
+        )
+        self.df_plot_pmap = json_to_pandas(
+            self.working_data, "df_plot_pmap", self.meta_data["cols_key_meta"]["date"]
+        )
         if selected_loc_ids is not None:
             self.selected_loc_ids = [
                 point["customdata"][0] for point in selected_loc_ids["points"]
@@ -136,12 +190,42 @@ class DataPlotter:
         else:
             self.selected_loc_ids = self.meta_data["loc_id_all"]
 
+    def df_between_dates(self, date_range):
+        assert self.df_plot_pca.index.equals(self.df_plot_pmap.index)
+        _series_years = self.df_plot_pca[self.cols_key_meta["date"]].dt.year
+        _idx_between_dates = self.df_plot_pca[
+            (_series_years >= date_range[0]) & (_series_years <= date_range[1])
+        ].index
+        self.df_plot_pca = self.df_plot_pca.loc[_idx_between_dates].copy()
+        self.df_plot_pmap = self.df_plot_pmap.loc[_idx_between_dates].copy()
+
     def _subset_df_locIds(self, df):
         return subset_df_locIds(
             df,
             self.cols_key_meta["loc_id"],
             self.selected_loc_ids,
         ).reset_index(drop=True)
+
+    def process_plot_groups(self, plot_groups, date_step):
+        self.plot_groups = plot_groups
+        # _col_date = self.cols_key_meta["date"]
+        # _dict_step_options = {
+        #     "Decade": 10,
+        #     "Five Year": 5,
+        #     "Year": 1,
+        # }
+        # date_step = _dict_step_options[date_step]
+        # if _col_date in plot_groups:
+        #     self.df_plot_pca[_col_date] = (
+        #         self.df_plot_pca[_col_date].dt.year // date_step
+        #     ) * date_step
+        #     self.df_plot_pmap[_col_date] = (
+        #         self.df_plot_pmap[_col_date].dt.year // date_step
+        #     ) * date_step
+
+        #     self.meta_data["dict_generic_colors"][_col_date] = make_color_dict_date(
+        #         self.df_plot_pca, _col_date
+        #     )
 
     @staticmethod
     def empty_figs():
@@ -150,11 +234,13 @@ class DataPlotter:
     def plot_pmap(self, n_neighbors):
         return make_fig_pmap(
             self.df_plot_pmap,
-            self.dict_color_map,
+            self.meta_data["dict_generic_colors"][self.plot_groups[0]],
+            self.meta_data["dict_generic_colors"][self.plot_groups[1]],
             self.dict_marker_map,
             self.cols_key_meta["loc_id"],
-            self.cols_key_meta["map_group"],
-            self.cols_key_meta["plot_group"],
+            self.plot_groups[0],
+            self.plot_groups[1],
+            self.cols_key_meta["date"],
             n_neighbors,
         )
 
@@ -163,9 +249,11 @@ class DataPlotter:
             self.df_plot_pca,
             self.ldg_df,
             self.expl_var,
-            self.dict_color_map,
+            self.meta_data["dict_generic_colors"][self.plot_groups[0]],
+            self.meta_data["dict_generic_colors"][self.plot_groups[1]],
             self.dict_marker_map,
             self.cols_key_meta["loc_id"],
-            self.cols_key_meta["map_group"],
-            self.cols_key_meta["plot_group"],
+            self.plot_groups[0],
+            self.plot_groups[1],
+            self.cols_key_meta["date"],
         )

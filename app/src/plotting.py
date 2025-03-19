@@ -3,11 +3,11 @@ import numpy as np
 import plotly.express as px
 
 # map size
-fig_height_px_map = 700
-fig_width_px_map = 700
+fig_height_px_map = 650
+fig_width_px_map = 1400
 # plot size
-fig_height_px_plot = 800
-fig_width_px_plot = 800
+fig_height_px_plot = 650
+fig_width_px_plot = 700
 
 size_marker = 11
 size_line_1 = 1.2
@@ -37,12 +37,16 @@ def make_map(df, **kwargs):
         k: v for k, v in kwargs.items() if k in px.scatter_mapbox.__code__.co_varnames
     }
     _kwargs.update(kwargs)
+    _col_group_id = _kwargs["color"]
+    _kwargs["color"] = "."
+    df.rename(columns={_col_group_id: "."}, inplace=True)
     fig = px.scatter_mapbox(
         df,
         **_kwargs,
     )
     fig.update_traces(
-        hovertemplate="%{customdata[0]}", selector={"type": "scattermapbox"}
+        hovertemplate="%{customdata[0]}",
+        selector={"type": "scattermapbox"},
     )
     # legend at the bottom
     fig.update_layout(
@@ -59,8 +63,21 @@ def make_map(df, **kwargs):
             }
         ],
         margin={"r": 0, "t": 0, "l": 0, "b": 0},
+        # legend=dict(
+        #     orientation="h", yanchor="bottom", y=-0.01, xanchor="center", x=0.5
+        # ),
         legend=dict(
-            orientation="h", yanchor="bottom", y=-0.01, xanchor="center", x=0.5
+            # orientation="v",  # Vertical orientation
+            # yanchor="top",  # Places legend to the top of the plot
+            # y=-0.1,  # Adjust these parameters to position the legend vertically
+            # xanchor="center",
+            # x=0.5,  # Places legend to the right side
+            orientation="h",
+            yanchor="top",
+            y=-0.1,
+            xanchor="center",
+            x=0.5,
+            itemsizing="constant",
         ),
     )
     return fig
@@ -76,37 +93,44 @@ def find_axis_limits(df, x_col, y_col, margin=0.1):
     return x_min - x_margin, x_max + x_margin, y_min - y_margin, y_max + y_margin
 
 
-def generate_text(site, df, primary_domain, secondary_domain):
+def generate_text(site, df, primary_domain, secondary_domain, date_col):
+    # Pre-format the date column for easier access later
+    if date_col:
+        formatted_dates = df[date_col]
+        # try:
+        #     formatted_dates = df[date_col].dt.strftime("%Y-%m-%d")
+        # except AttributeError:
+        #     formatted_dates = df[date_col]
+    else:
+        formatted_dates = ["N/A"] * len(df)
+
+    # Create a list comprehension to generate the text entries
     if df[primary_domain].iloc[0] == df[secondary_domain].iloc[0]:
-        _t = [
-            "<b>{}</b><br><b>Primary Domain:</b> {}<br>".format(loc, p)
-            for loc, p in zip(
-                [site] * len(df),
-                df[primary_domain],
-            )
+        texts = [
+            f"<b>{site}</b><br><b>Primary Domain:</b> {p}<br><b>Date:</b> {date}"
+            for p, date in zip(df[primary_domain], formatted_dates)
         ]
     else:
-        _t = [
-            "<b>{}</b><br><b>Primary Domain:</b> {}<br><b>Secondary Domain:</b> {}".format(
-                loc, p, s
-            )
-            for loc, p, s in zip(
-                [site] * len(df),
-                df[primary_domain],
-                df[secondary_domain],
+        texts = [
+            f"<b>{site}</b><br><b>Primary Domain:</b> {p}<br><b>Secondary Domain:</b> {s}<br><b>Date:</b> {date}"
+            for p, s, date in zip(
+                df[primary_domain], df[secondary_domain], formatted_dates
             )
         ]
-    return _t
+
+    return texts
 
 
 # can adjust to display multiple groups per site
 def make_base_scatter_plot(
     df,
-    name_color_map,
+    dict_color_map_primary,
+    dict_color_map_secondary,
     name_marker_map,
     col_loc_id,
     col_primary_domain,
     col_secondary_domain,
+    col_date,
     x_col,
     y_col,
     title,
@@ -123,40 +147,74 @@ def make_base_scatter_plot(
         width=fig_width_px_plot,
         xaxis=dict(autorange=False, range=[xmin, xmax]),
         yaxis=dict(autorange=False, range=[ymin, ymax]),
-        title=title,
+        # title=title,
+        title=None,
     )
-    for loc_code in df[col_loc_id].unique():
-        group_df = df[df[col_loc_id] == loc_code]
-        # color_face = name_color_map[group_df[primary_domain].unique()[0]]
-        color_face = name_color_map[group_df[col_primary_domain].unique()[0]]
-        # color_line = name_color_map[group_df[secondary_domain].unique()[0]]
-        color_line = name_color_map[group_df[col_secondary_domain].unique()[0]]
-        size_line = size_line_1 if color_line != color_face else size_line_2
-        color_line = color_line if color_line != color_face else "black"
-        plotly_fig.add_trace(
-            go.Scatter(
-                x=group_df[x_col],
-                y=group_df[y_col],
-                mode="markers",
-                name=loc_code,  # site_df["domain_1"].map(palette)
-                marker=dict(
-                    size=size_marker,
-                    color=color_face,
-                    line={
-                        "color": color_line,
-                        "width": size_line,
-                    },
-                    symbol=name_marker_map[loc_code],
-                ),
-                text=generate_text(
-                    loc_code,
-                    group_df,
-                    col_primary_domain,
-                    col_secondary_domain,
-                ),
-                hoverinfo="text",
-            )
-        )
+    for loc_code, group_df in df.groupby(col_loc_id):
+        # group_df = df[df[col_loc_id] == loc_code]
+        show_legend = True
+        for prim_dom, df_prim_dom in group_df.groupby(col_primary_domain):
+            for sec_dom, df_sec_dom in df_prim_dom.groupby(col_secondary_domain):
+                color_face = dict_color_map_primary[prim_dom]
+                color_line = dict_color_map_secondary[sec_dom]
+                size_line = size_line_1 if color_line != color_face else size_line_2
+                color_line = color_line if color_line != color_face else "black"
+                plotly_fig.add_trace(
+                    go.Scatter(
+                        x=df_sec_dom[x_col],
+                        y=df_sec_dom[y_col],
+                        mode="markers",
+                        name=loc_code,
+                        legendgroup=loc_code,
+                        marker=dict(
+                            size=size_marker,
+                            color=color_face,
+                            line={"color": color_line, "width": size_line},
+                            symbol=name_marker_map[loc_code],
+                        ),
+                        text=generate_text(
+                            loc_code,
+                            df_sec_dom,
+                            col_primary_domain,
+                            col_secondary_domain,
+                            col_date,
+                        ),
+                        hoverinfo="text",
+                        showlegend=show_legend,
+                    )
+                )
+                show_legend = False
+        # color_face = dict_color_map_primary[group_df[col_primary_domain].unique()[0]]
+        # color_line = dict_color_map_secondary[
+        #     group_df[col_secondary_domain].unique()[0]
+        # ]
+        # size_line = size_line_1 if color_line != color_face else size_line_2
+        # color_line = color_line if color_line != color_face else "black"
+        # plotly_fig.add_trace(
+        #     go.Scatter(
+        #         x=group_df[x_col],
+        #         y=group_df[y_col],
+        #         mode="markers",
+        #         name=loc_code,  # site_df["domain_1"].map(palette)
+        #         marker=dict(
+        #             size=size_marker,
+        #             color=color_face,
+        #             line={
+        #                 "color": color_line,
+        #                 "width": size_line,
+        #             },
+        #             symbol=name_marker_map[loc_code],
+        #         ),
+        #         text=generate_text(
+        #             loc_code,
+        #             group_df,
+        #             col_primary_domain,
+        #             col_secondary_domain,
+        #             col_date,
+        #         ),
+        #         hoverinfo="text",
+        #     )
+        # )
     return plotly_fig
 
 
@@ -197,20 +255,24 @@ def annotate_loadings(ldg_df, plotly_fig, x_col, y_col):
 
 def make_fig_pmap(
     df,
-    name_color_map,
+    dict_color_map_primary,
+    dict_color_map_secondary,
     name_marker_map,
     col_loc_id,
     col_primary_domain,
     col_secondary_domain,
+    col_date,
     n_neighbors=10,
 ):
     plotly_fig = make_base_scatter_plot(
         df=df,
-        name_color_map=name_color_map,
+        dict_color_map_primary=dict_color_map_primary,
+        dict_color_map_secondary=dict_color_map_secondary,
         name_marker_map=name_marker_map,
         col_loc_id=col_loc_id,
         col_primary_domain=col_primary_domain,
         col_secondary_domain=col_secondary_domain,
+        col_date=col_date,
         x_col="PMAP1",
         y_col="PMAP2",
         title=f"PMAP nNeighbors={n_neighbors}",
@@ -224,19 +286,23 @@ def make_fig_pca(
     df_pca,
     ldg_df,
     expl_var,
-    name_color_map,
+    dict_color_map_primary,
+    dict_color_map_secondary,
     name_marker_map,
     col_loc_id,
     col_primary_domain,
     col_secondary_domain,
+    col_date,
 ):
     plotly_fig = make_base_scatter_plot(
         df=df_pca,
-        name_color_map=name_color_map,
+        dict_color_map_primary=dict_color_map_primary,
+        dict_color_map_secondary=dict_color_map_secondary,
         name_marker_map=name_marker_map,
         col_loc_id=col_loc_id,
         col_primary_domain=col_primary_domain,
         col_secondary_domain=col_secondary_domain,
+        col_date=col_date,
         x_col="PC1",
         y_col="PC2",
         title=f"PCA ({expl_var[0]*100:.2f}%, {expl_var[1]*100:.2f}%)",
@@ -244,37 +310,4 @@ def make_fig_pca(
         y_label=f"PC2 ({expl_var[1]*100:.2f}%)",
     )
     plotly_fig = annotate_loadings(ldg_df, plotly_fig, "PC1", "PC2")
-    # for x, y, metal in zip(ldg_df["PC1"], ldg_df["PC2"], ldg_df["metals"]):
-    #     # Arrow annotation
-    #     plotly_fig.add_annotation(
-    #         x=x,
-    #         y=y,
-    #         ax=0,
-    #         ay=0,
-    #         xref="x",
-    #         yref="y",
-    #         axref="x",
-    #         ayref="y",
-    #         showarrow=True,
-    #         arrowhead=3,
-    #         arrowsize=1.5,
-    #         arrowwidth=0.8,
-    #         arrowcolor="black",
-    #     )
-
-    #     # Text annotation slightly offset from the arrow tip
-    #     direction = np.array([x, y]) / np.linalg.norm([x, y])
-    #     offset_distance = 0.02
-    #     text_offset = direction * offset_distance
-    #     plotly_fig.add_annotation(
-    #         x=x + text_offset[0],
-    #         y=y + text_offset[1],
-    #         xref="x",
-    #         yref="y",
-    #         text=metal,
-    #         showarrow=False,
-    #         font=dict(size=13, color="black"),
-    #     )
-    #     # add scatter plot of the data points
-
     return plotly_fig

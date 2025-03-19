@@ -10,19 +10,98 @@
 # extract_marker_dict
 # pc_scaler
 # make_df_for_biplot
-#
-
 from typing import List, Tuple
-from pandas import DataFrame, read_json
+from pandas import DataFrame, read_json, to_datetime
 import io
+from datetime import datetime
+
+# import 'alphabet' from plotly
+import plotly.colors as pc
+
+DISCRETE_COLOR_LIST = pc.qualitative.Alphabet
+COLOR_BREWER_1 = pc.qualitative.Set1
 
 
 def get_key_cols_meta(df):
     col_loc_id = df.filter(regex=r"^LOCATION-ID_").columns.to_list()[0]
-    col_map_group = df.filter(regex=r"^MAP-GROUPS-DOMAIN_").columns.to_list()[0]
-    col_plot_groups = df.filter(regex=r"^PLOT-GROUPS-DOMAIN-1_").columns.to_list()[0]
+    # col_map_group = df.filter(regex=r"^MAP-GROUPS-DOMAIN_").columns.to_list()[0]
+    # col_plot_groups = df.filter(regex=r"^PLOT-GROUPS-DOMAIN-1_").columns.to_list()[0]
+    col_date = df.filter(regex=r"^DATETIME$").columns.to_list()
+    cols_plot_groups = df.filter(
+        regex=r"^PLOTTING-GROUPS-DOMAIN-[0-9]{0,1}_LABELS$"
+    ).columns.to_list()
+    # will use this to then populate n color dictionaries
+    # and pass them around for color mapping
+    print(cols_plot_groups)
+    if len(col_date) == 0:
+        col_date = None
+    else:
+        col_date = col_date[0]
     col_long_lat = ["LONGITUDE", "LATITUDE"]
-    return col_loc_id, col_map_group, col_plot_groups, col_long_lat
+    return (
+        col_loc_id,
+        col_date,
+        cols_plot_groups,
+        # col_map_group,
+        # col_plot_groups,
+        col_long_lat,
+    )
+
+
+def make_color_dict_date(df, col_plot_group):
+    _n_unique_colors = df[col_plot_group].nunique()
+    _unique_color_list = COLOR_BREWER_1 * (_n_unique_colors // len(COLOR_BREWER_1) + 1)
+    _dict_color = {
+        k: v for k, v in zip(sorted(df[col_plot_group].unique()), _unique_color_list)
+    }
+    return _dict_color
+
+
+def make_color_dict(df, col_plot_group):
+    _n_unique_colors = df[col_plot_group].nunique()
+    _unique_color_list = DISCRETE_COLOR_LIST * (
+        _n_unique_colors // len(DISCRETE_COLOR_LIST) + 1
+    )
+    _dict_color = {
+        k: v for k, v in zip(sorted(df[col_plot_group].unique()), _unique_color_list)
+    }
+    return _dict_color
+
+
+def find_make_color_dict(df, col_plot_group):
+    _col_prefix = col_plot_group.split("_LABELS")[0]
+    _col_predefined_color = df.filter(regex=f"^{_col_prefix}_COLORS$").columns.to_list()
+    if len(_col_predefined_color) == 0:
+        _dict_color = make_color_dict(df, col_plot_group)
+    else:
+        _dict_color = (
+            df.groupby(col_plot_group)[_col_predefined_color[0]].first().to_dict()
+        )
+    return _dict_color
+
+
+def make_plotting_group_color_dicts(df, cols_plot_groups, col_date=None):
+    _dict_col_colors = {}
+    for col in cols_plot_groups:
+        _dict_col_colors[col] = find_make_color_dict(df, col)
+    if col_date:
+        print("adding date color dict")
+        _dict_col_colors[col_date] = {}
+    return _dict_col_colors
+
+
+def set_key_col_date(df, col_datetime):
+    if col_datetime:
+        try:
+            df[col_datetime] = to_datetime(df[col_datetime])
+        except ValueError as e:
+            df[col_datetime] = datetime.now()
+            print("Could not parse date column, setting to current date")
+            print(f"Error: {e}")
+            pass
+    else:
+        print("No date column provided")
+    return df
 
 
 def get_key_cols_plot(df):
@@ -46,15 +125,15 @@ def rename_cols_analyte(df, cols_numeric_all, cols_numeric_simple, cols_numeric_
 
 
 def extract_coordinate_dataframe(
-    df, col_map_group, col_loc_id, col_longitude, col_latitude
+    df, list_plot_groups, col_loc_id, col_longitude, col_latitude
 ):
-    return (
-        df.groupby(col_loc_id)[
-            [col_map_group, col_loc_id, col_longitude, col_latitude, "MAP-MARKER-SIZE"]
-        ]
-        .first()
-        .copy()
-    )
+    _cols_grab = list_plot_groups + [
+        col_loc_id,
+        col_longitude,
+        col_latitude,
+        "MAP-MARKER-SIZE",
+    ]
+    return df.groupby(col_loc_id)[_cols_grab].first().copy()
 
 
 def extract_color_dict(df, col_color_groups, col_color_colors):
@@ -91,8 +170,18 @@ def subset_df_numericFeatures(
     )
 
 
-def json_to_pandas(json_dict, key):
-    return read_json(io.StringIO(json_dict[key]))
+def pandas_to_json(df: DataFrame, col_datetime: str = None) -> str:
+    if col_datetime:
+        df[col_datetime] = df[col_datetime].dt.strftime("%Y-%m-%d")
+    return df.to_json(orient="split", date_format="iso")
+
+
+def json_to_pandas(json_dict, key, col_datetime=None):
+    df = read_json(io.StringIO(json_dict[key]), orient="split")
+    if col_datetime:
+        df[col_datetime] = to_datetime(df[col_datetime])
+    return df
+    # return read_json(io.StringIO(json_dict[key]))
 
 
 def pc_scaler(series):
