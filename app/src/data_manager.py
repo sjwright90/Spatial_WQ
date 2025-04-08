@@ -2,10 +2,8 @@ from .plotting import make_fig_pca, make_fig_pmap, empty_fig
 from .data_process import (
     get_key_cols_plot,
     set_key_col_date,
-    extract_color_dict,
-    extract_marker_dict,
+    df_col_group_to_dict,
     get_key_cols_meta,
-    make_color_dict_date,
     make_plotting_group_color_dicts,
     extract_coordinate_dataframe,
     rename_cols_analyte,
@@ -25,12 +23,12 @@ import json
 from datetime import datetime
 
 
+# TODO: make date parsing more 'generous'
 class DataPreprocessor:
     def __init__(self, content_string):
         decoded = base64.b64decode(content_string)
 
-        self.df_master = pd.read_csv(io.BytesIO(decoded))
-
+        self.df_master = pd.read_csv(io.BytesIO(decoded), float_precision="high")
         # get hash of content
         self.content_hash = generate_df_hash_version(self.df_master)
 
@@ -85,7 +83,7 @@ class DataPreprocessor:
             self.cols_key_meta["long_lat"][1],
         )
 
-        self.dict_marker_map = extract_marker_dict(
+        self.dict_marker_map = df_col_group_to_dict(
             self.df_master,
             self.cols_key_meta["loc_id"],
             "MARKERS-PLOT-DOMAIN",
@@ -94,7 +92,6 @@ class DataPreprocessor:
         self.dict_generic_colors = make_plotting_group_color_dicts(
             self.df_master,
             self.cols_key_meta["plotting_groups"],
-            # col_date=self.cols_key_meta["date"],
         )
 
         self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
@@ -105,7 +102,6 @@ class DataPreprocessor:
         return (
             json.dumps(
                 {
-                    # "df_master": self.df_master.to_json(),
                     "df_master": pandas_to_json(
                         self.df_master, self.cols_key_meta["date"]
                     ),
@@ -115,7 +111,6 @@ class DataPreprocessor:
                 {
                     "cols_key_plot": self.cols_key_plot,
                     "cols_key_meta": self.cols_key_meta,
-                    # "dict_color_map": self.dict_color_map,
                     "dict_marker_map": self.dict_marker_map,
                     "dict_generic_colors": self.dict_generic_colors,
                     "loc_id_all": self.loc_id_all,
@@ -138,7 +133,6 @@ class DataPlotter:
         meta_data,
         selected_loc_ids,
         plot_groups,
-        date_step,
         date_range,
     ):
         self.initialize_data(
@@ -146,7 +140,6 @@ class DataPlotter:
             meta_data,
             selected_loc_ids,
             plot_groups,
-            date_step,
             date_range,
         )
 
@@ -156,7 +149,6 @@ class DataPlotter:
         meta_data,
         selected_loc_ids,
         plot_groups,
-        date_step,
         date_range,
     ):
         try:
@@ -169,10 +161,10 @@ class DataPlotter:
             self.df_between_dates(date_range)
             self.ldg_df = pd.read_json(io.StringIO(self.working_data["ldg_df"]))
             self.expl_var = self.working_data["expl_var"]
-            self.process_plot_groups(plot_groups, date_step)
+            self.plot_groups = plot_groups
         except Exception as e:
             print(f"Error in initialize_data: {e}")
-            # logging.error(f"Error in initialize_data: {e}")
+            raise ValueError("Error initializing data") from e
 
     def load_dataframes(self, selected_loc_ids):
         self.df_plot_pca = json_to_pandas(
@@ -205,27 +197,6 @@ class DataPlotter:
             self.cols_key_meta["loc_id"],
             self.selected_loc_ids,
         ).reset_index(drop=True)
-
-    def process_plot_groups(self, plot_groups, date_step):
-        self.plot_groups = plot_groups
-        # _col_date = self.cols_key_meta["date"]
-        # _dict_step_options = {
-        #     "Decade": 10,
-        #     "Five Year": 5,
-        #     "Year": 1,
-        # }
-        # date_step = _dict_step_options[date_step]
-        # if _col_date in plot_groups:
-        #     self.df_plot_pca[_col_date] = (
-        #         self.df_plot_pca[_col_date].dt.year // date_step
-        #     ) * date_step
-        #     self.df_plot_pmap[_col_date] = (
-        #         self.df_plot_pmap[_col_date].dt.year // date_step
-        #     ) * date_step
-
-        #     self.meta_data["dict_generic_colors"][_col_date] = make_color_dict_date(
-        #         self.df_plot_pca, _col_date
-        #     )
 
     @staticmethod
     def empty_figs():

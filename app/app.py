@@ -206,6 +206,7 @@ def process_working_data(
     if not feature_selection or not loc_id_selection:
         return None
     master_data = json.loads(master_data)
+
     meta_data = json.loads(meta_data)
     df_master = json_to_pandas(
         master_data, "df_master", meta_data["cols_key_meta"]["date"]
@@ -267,7 +268,6 @@ def update_loc_id_dropdown(n_clicks, selectedData, meta_data):
         Input("map", "selectedData"),
         Input("plot-group-dropdown-1", "value"),
         Input("plot-group-dropdown-2", "value"),
-        Input("date-step-dropdown", "value"),
         Input("date-range-slider", "value"),
     ],
     [
@@ -282,7 +282,6 @@ def plot_data(
     selectedData,
     plot_group_1,
     plot_group_2,
-    date_step,
     date_range,
     meta_data,
     n_neighbors,
@@ -296,7 +295,6 @@ def plot_data(
         meta_data,
         selectedData,
         [plot_group_1, plot_group_2],
-        date_step,
         date_range,
     )
     fig_pca = data_plotter.plot_pca()
@@ -305,6 +303,6 @@ def plot_data(
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-# port = 8050
-# if __name__ == "__main__":
-#     app.run_server(debug=False, port=port)
+port = 8050
+if __name__ == "__main__":
+    app.run_server(debug=False, port=port)

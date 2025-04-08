@@ -72,21 +72,6 @@ check_list_plot_date = html.Div(
 )
 
 
-dropdown_plot_group_dateStep = html.Div(
-    [
-        html.P("Select Date Step"),
-        dcc.Dropdown(
-            id="date-step-dropdown",
-            # options=["Decade", "Five Year", "Year"],
-            options=[],
-            # value="Year",
-            value=[],
-            multi=False,
-            style=DROPDOWN_UNI_STYLE,
-        ),
-    ]
-)
-
 range_slider_date_filter = html.Div(
     [
         html.P("Select Date Range"),
@@ -95,7 +80,7 @@ range_slider_date_filter = html.Div(
             min=0,
             max=100,
             step=1,
-            value=[20, 20],  # [df["date"].min(), df["date"].max()],
+            value=[20, 20],
             marks={i: str(i) for i in range(0, 101, 10)},
         ),
     ]
@@ -110,7 +95,6 @@ sidebar = html.Div(
         dropdown_plot_group_1,
         dropdown_plot_group_2,
         check_list_plot_date,
-        dropdown_plot_group_dateStep,
     ],
     id="sidebar",
     style=SIDEBAR_HIDEN,

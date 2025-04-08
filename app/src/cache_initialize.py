@@ -1,23 +1,5 @@
-from flask_caching import Cache
-import os
-import sys
 import hashlib
 from pandas.util import hash_pandas_object
-
-
-# define local MEIPASS path
-def get_resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
-
-
-def init_cache(app, config):
-    cache = Cache(app, config=config)
-    return cache
 
 
 def make_custom_cache_key_dimensionReduction(*args, **kwargs):

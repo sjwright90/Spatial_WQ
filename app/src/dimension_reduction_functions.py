@@ -12,7 +12,6 @@ from .data_process import (
 from .compositional_data_functions import clr_transform_scale
 
 
-# cache function for PCA
 def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
     """
     Run PCA on a dataframe.
@@ -44,8 +43,6 @@ def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
     return df_plot, ldg_df, expl_var
 
 
-# cache function for PacMAP with 100 neighbors
-# @cache.memoize()
 def run_pmap(df: DataFrame, cat_cols: list, analytes: list, n_neighbors: int = 15):
     """
     Run PacMAP on a dataframe.

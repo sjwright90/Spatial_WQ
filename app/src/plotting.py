@@ -309,5 +309,6 @@ def make_fig_pca(
         x_label=f"PC1 ({expl_var[0]*100:.2f}%)",
         y_label=f"PC2 ({expl_var[1]*100:.2f}%)",
     )
+
     plotly_fig = annotate_loadings(ldg_df, plotly_fig, "PC1", "PC2")
     return plotly_fig

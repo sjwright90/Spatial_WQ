@@ -35,7 +35,7 @@ def clr_transform(X: np.ndarray) -> np.ndarray:
         Transformed data.
     """
     # check missing values
-    X[X == 0] = np.nan
+    X[X == 0.0] = np.nan
     if array_anynull(X):
         raise ValueError(
             "Missing values or zeros detected in data, please remove before transformation"
