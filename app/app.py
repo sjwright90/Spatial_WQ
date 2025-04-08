@@ -303,6 +303,6 @@ def plot_data(
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-port = 8050
-if __name__ == "__main__":
-    app.run_server(debug=False, port=port)
+# port = 8050
+# if __name__ == "__main__":
+#     app.run_server(debug=False, port=port)
