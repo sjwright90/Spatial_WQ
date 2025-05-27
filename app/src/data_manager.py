@@ -97,33 +97,64 @@ class DataPreprocessor:
         self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
         self.cols_numeric_all = self.cols_key_plot["numeric_all"]
 
-    def generate_dict_data_structure(self):
+    def get_session_dict(self):
+        return {
+            "df_master": pandas_to_json(self.df_master, self.cols_key_meta["date"]),
+            "meta_data": {
+                "cols_key_plot": self.cols_key_plot,
+                "cols_key_meta": self.cols_key_meta,
+                "dict_marker_map": self.dict_marker_map,
+                "dict_generic_colors": self.dict_generic_colors,
+                "loc_id_all": self.loc_id_all,
+                "cols_numeric_all": self.cols_numeric_all,
+                "df_coordinate": self.df_coordinate.to_json(),
+            },
+            "data_hash": {
+                "data_hash": self.content_hash,
+            },
+            "working_data": None,  # Placeholder for working data
+            "plotting_data": {
+                "feature_selection_dropdown_options": self.cols_key_plot["numeric_all"],
+                "feature_selection_dropdown_value": self.cols_key_plot["numeric_all"],
+                "loc_id_dropdown_options": self.loc_id_all,
+                "loc_id_dropdown_value": self.loc_id_all,
+                "map_group_dropdown_options": self.cols_key_meta["plotting_groups"],
+                "map_group_dropdown_value": self.cols_key_meta["plotting_groups"][0],
+                "plot_group_dropdown_1_options": self.cols_key_meta["plotting_groups"],
+                "plot_group_dropdown_1_value": self.cols_key_meta["plotting_groups"][0],
+                "plot_group_dropdown_2_options": self.cols_key_meta["plotting_groups"],
+                "plot_group_dropdown_2_value": self.cols_key_meta["plotting_groups"][0],
+                "pmap_neighbors": 15,  # Default value for neighbors in pmap
+            },
+            "version": 1,
+        }
 
-        return (
-            json.dumps(
-                {
-                    "df_master": pandas_to_json(
-                        self.df_master, self.cols_key_meta["date"]
-                    ),
-                }
-            ),
-            json.dumps(
-                {
-                    "cols_key_plot": self.cols_key_plot,
-                    "cols_key_meta": self.cols_key_meta,
-                    "dict_marker_map": self.dict_marker_map,
-                    "dict_generic_colors": self.dict_generic_colors,
-                    "loc_id_all": self.loc_id_all,
-                    "cols_numeric_all": self.cols_numeric_all,
-                    "df_coordinate": self.df_coordinate.to_json(),
-                },
-            ),
-            json.dumps(
-                {
-                    "data_hash": self.content_hash,
-                }
-            ),
-        )
+    # def generate_dict_data_structure(self):
+    #     return (
+    #         json.dumps(
+    #             {
+    #                 "df_master": pandas_to_json(
+    #                     self.df_master, self.cols_key_meta["date"]
+    #                 ),
+    #             }
+    #         ),
+    #         json.dumps(
+    #             {
+    #                 "cols_key_plot": self.cols_key_plot,
+    #                 "cols_key_meta": self.cols_key_meta,
+    #                 "dict_marker_map": self.dict_marker_map,
+    #                 "dict_generic_colors": self.dict_generic_colors,
+    #                 "loc_id_all": self.loc_id_all,
+    #                 "cols_numeric_all": self.cols_numeric_all,
+    #                 "df_coordinate": self.df_coordinate.to_json(),
+    #             },
+    #         ),
+    #         json.dumps(
+    #             {
+    #                 "data_hash": self.content_hash,
+    #             }
+    #         ),
+    #     )
 
 
 class DataPlotter:
@@ -228,3 +259,41 @@ class DataPlotter:
             self.plot_groups[1],
             self.cols_key_meta["date"],
         )
+
+
+class SessionManager:
+    @staticmethod
+    def package_plotting_data(plot_components_pca, plot_components_pmap, meta_data):
+        dict_working_data = {
+            "df_plot_pca": pandas_to_json(
+                plot_components_pca[0], meta_data["cols_key_meta"]["date"]
+            ),
+            "ldg_df": plot_components_pca[1].to_json(),
+            "expl_var": plot_components_pca[2],
+            "df_plot_pmap": pandas_to_json(
+                plot_components_pmap, meta_data["cols_key_meta"]["date"]
+            ),
+        }
+        return dict_working_data
+
+    # @staticmethod
+    # def package_session_data(
+    #     json_master_data,  # json level
+    #     json_meta_data,
+    #     json_hash_data,
+    #     json_working_data,
+    #     feature_selection_dropdown,
+    #     loc_id_dropdown,
+    #     pmap_neighbors,
+    # ):
+    #     session = {
+    #         "master_data": json_master_data,
+    #         "meta_data": json_meta_data,
+    #         "hash_data": json_hash_data,
+    #         "working_data": json_working_data,
+    #         "feature_selection_dropdown": feature_selection_dropdown,
+    #         "loc_id_dropdown": loc_id_dropdown,
+    #         "pmap_neighbors": pmap_neighbors,
+    #     }
+
+    #     return json.dumps(session)

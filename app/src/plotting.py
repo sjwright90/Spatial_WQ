@@ -21,18 +21,46 @@ def empty_fig():
     return go.Figure()
 
 
+def estimate_mapbox_zoom(latitudes, longitudes):
+    lat_diff = np.max(latitudes) - np.min(latitudes)
+    lon_diff = np.max(longitudes) - np.min(longitudes)
+    max_diff = max(lat_diff, lon_diff)
+
+    # Rough empirical formula to match visible bounds to zoom level
+    if max_diff < 0.0005:
+        return 15
+    elif max_diff < 0.005:
+        return 14
+    elif max_diff < 0.05:
+        return 13
+    elif max_diff < 0.1:
+        return 12
+    elif max_diff < 0.5:
+        return 10
+    elif max_diff < 1:
+        return 9
+    elif max_diff < 5:
+        return 7
+    elif max_diff < 10:
+        return 6
+    else:
+        return 4
+
+
 def make_map(df, **kwargs):
     _kwargs = {
         "lat": "LATITUDE",
         "lon": "LONGITUDE",
         "hover_data": {},
-        "zoom": 12,
+        # "zoom": 12,
         "size": "MAP-MARKER-SIZE",
         "size_max": 8,
         "opacity": 1,
         "height": fig_height_px_map,
         "width": fig_width_px_map,
     }
+    zoom = estimate_mapbox_zoom(df["LATITUDE"].values, df["LONGITUDE"].values)
+    _kwargs["zoom"] = zoom
     kwargs = {
         k: v for k, v in kwargs.items() if k in px.scatter_mapbox.__code__.co_varnames
     }
@@ -276,8 +304,8 @@ def make_fig_pmap(
         x_col="PMAP1",
         y_col="PMAP2",
         title=f"PMAP nNeighbors={n_neighbors}",
-        x_label="PMAP1",
-        y_label="PMAP2",
+        x_label=f"PMAP1 (nNeighbors={n_neighbors})",
+        y_label=f"PMAP2 (nNeighbors={n_neighbors})",
     )
     return plotly_fig
 

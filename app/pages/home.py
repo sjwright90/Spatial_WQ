@@ -20,6 +20,40 @@ navbar = dbc.NavbarSimple(
     sticky="top",
 )
 
+textenter_user_id = html.Div(
+    children=[
+        dcc.Input(  # user enters their id
+            id="user-session-id",
+            type="text",
+            placeholder="Enter your user ID",
+            value=None,
+        ),
+    ]
+)
+
+dropdown_button_redis_import = html.Div(
+    [
+        html.Button(
+            "List sessions",
+            id="button-list-redis-keys",
+            style=BUTTON_STYLE,
+        ),
+        dcc.Dropdown(
+            id="user-redis-key-dropdown",
+            options=[],
+            value=None,
+            multi=False,
+            style=DROPDOWN_UNI_STYLE,
+            placeholder="Select a session to load",
+        ),
+        html.Button(
+            "Import session",
+            id="redis-import-button",
+            style=BUTTON_STYLE,
+        ),
+    ]
+)
+
 dropdown_map_group = html.Div(
     [
         html.P("Select Map Group Column"),
@@ -71,6 +105,56 @@ check_list_plot_date = html.Div(
     ]
 )
 
+textenter_redis_save = html.Div(
+    children=[
+        dcc.Input(
+            id="user-redis-key-text",
+            type="text",
+            value=None,
+            placeholder="Store session as:",
+        ),
+        html.Button(
+            "Store session",
+            id="redis-save-button",
+            style=BUTTON_STYLE,
+        ),
+        html.Div(id="save-session-output"),
+        dcc.Interval(
+            id="clear-save-output", interval=5000, n_intervals=0, disabled=True
+        ),
+    ]
+)
+
+download_button = html.Div(
+    children=[
+        dcc.Download(id="download-session-json"),
+        html.Button(
+            "Download session as JSON",
+            id="download-session-button",
+            style=BUTTON_STYLE,
+        ),
+    ]
+)
+# SIDEBAR
+sidebar = html.Div(
+    children=[
+        html.P("Load-Save Session", className="lead"),
+        textenter_user_id,
+        dropdown_button_redis_import,
+        textenter_redis_save,
+        html.P("Download Session", className="lead"),
+        download_button,
+        html.Hr(),
+        html.P("Customize plotting options", className="lead"),
+        dropdown_map_group,
+        dropdown_plot_group_1,
+        dropdown_plot_group_2,
+        check_list_plot_date,
+    ],
+    id="sidebar",
+    style=SIDEBAR_HIDEN,
+)
+
 
 range_slider_date_filter = html.Div(
     [
@@ -84,20 +168,6 @@ range_slider_date_filter = html.Div(
             marks={i: str(i) for i in range(0, 101, 10)},
         ),
     ]
-)
-
-sidebar = html.Div(
-    children=[
-        html.H3("Plot filters", className="display-4"),
-        html.Hr(),
-        html.P("Customize plotting options", className="lead"),
-        dropdown_map_group,
-        dropdown_plot_group_1,
-        dropdown_plot_group_2,
-        check_list_plot_date,
-    ],
-    id="sidebar",
-    style=SIDEBAR_HIDEN,
 )
 
 
@@ -212,9 +282,10 @@ main_content = html.Div(
 def create_page_map():
     layout = html.Div(
         children=[
-            dcc.Store(id="data-hash"),
-            dcc.Store(id="master-data"),
-            dcc.Store(id="meta-data"),
+            dcc.Store(
+                id="meta-data", storage_type="memory"
+            ),  # needed still to not unpack entire session data each time
+            dcc.Store(id="session", storage_type="memory"),
             dcc.Store(
                 id="working-data"
             ),  # TODO: consider using 'session' storage for plotting data to reduce parsing/unparsing JSON each time plot is updated

@@ -11,13 +11,20 @@ from flask import Flask
 import pandas as pd
 
 from src.plotting import make_map, empty_fig
-from src.data_manager import DataPreprocessor, DataPlotter
+from src.data_manager import DataPreprocessor, DataPlotter, SessionManager
 
 from src.data_process import json_to_pandas, pandas_to_json
 
 # from src.compositional_data_functions import clr_transform_scale
 from src.dimension_reduction_functions import process_dimension_reduction
 from src.callbacks import callback_prevent_initial_output
+
+from src.session_manager import (
+    save_to_redis,
+    load_from_redis,
+    list_keys,
+    key_exists,
+)
 
 from pages.home import (
     create_page_map,
@@ -66,13 +73,9 @@ def toggle_sidebar(n, nclick):
 
 # IMPORT DATA FROM .CSV
 @app.callback(
-    Output("master-data", "data"),
-    Output("meta-data", "data"),
-    Output("data-hash", "data"),
-    Output("feature-selection-dropdown", "options"),
-    Output("feature-selection-dropdown", "value"),
-    Output("loc-id-dropdown", "options", allow_duplicate=True),
-    Output("loc-id-dropdown", "value", allow_duplicate=True),
+    Output("meta-data", "data"),  # still needed
+    Output("session", "data"),
+    Output("working-data", "data", allow_duplicate=True),  # need to clear output
     Input("upload-data", "contents"),
     prevent_initial_call=True,
 )
@@ -81,44 +84,156 @@ def process_data(contents):
         return None, None, None, [], [], [], []
     content_type, content_string = contents.split(",")
     data_preprocessor = DataPreprocessor(content_string)
-    dict_master_data, dict_meta_data, dict_hash_data = (
-        data_preprocessor.generate_dict_data_structure()
-    )
+    session_dict = data_preprocessor.get_session_dict()
     return (
-        dict_master_data,
-        dict_meta_data,
-        dict_hash_data,
-        data_preprocessor.cols_key_plot["numeric_all"],
-        data_preprocessor.cols_key_plot["numeric_all"],
-        data_preprocessor.loc_id_all,
-        data_preprocessor.loc_id_all,
+        json.dumps(session_dict["meta_data"]),
+        json.dumps(session_dict),
+        None,  # Clear working data on new upload
     )
 
 
+# POPULATE SESSION LOAD OPTIONS
+@app.callback(
+    Output("user-redis-key-dropdown", "options"),
+    Output("user-redis-key-dropdown", "value"),
+    Input("button-list-redis-keys", "n_clicks"),
+    State("user-session-id", "value"),
+)
+def update_redis_keys(n_clicks, session_id):
+    if n_clicks is None or session_id is None:
+        return dash.no_update
+    print(f"Loading Redis keys for session: {session_id}")
+    try:
+        keys = list_keys(session_id)
+    except Exception as e:
+        print(f"Error loading keys from Redis: {e}")
+        return dash.no_update
+    options = [{"label": key, "value": key} for key in keys]
+    return options, options[0]["value"] if options else None
+
+
+# IMPORT DATA FROM REDIS
+@app.callback(
+    Output("save-session-output", "children", allow_duplicate=True),
+    Output("clear-save-output", "disabled", allow_duplicate=True),
+    Output("session", "data", allow_duplicate=True),
+    Output("meta-data", "data", allow_duplicate=True),
+    Output("working-data", "data", allow_duplicate=True),
+    Input("redis-import-button", "n_clicks"),
+    State("user-session-id", "value"),
+    State("user-redis-key-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def load_session_data(n_clicks, session_id, key):
+    if session_id is None or key is None:
+        return (
+            "No session ID or key provided.",
+            False,  # Disable clear save output
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
+    print(f"Loading session - User: {session_id}, Session: {key}")
+    session = load_from_redis(session_id, key)
+    session = json.loads(session) if session else None
+    if session is None:
+        return (
+            f"No session data found for user '{session_id}' with key '{key}'.",
+            False,  # Disable clear save output
+            dash.no_update,
+            dash.no_update,
+        )
+    print(f"Session loaded successfully: {key}")
+    meta_data = session.get("meta_data", {})
+    working_data = session.get("working_data", {})
+    if not working_data:
+        working_data = None
+    else:
+        working_data = json.dumps(working_data)
+
+    return (
+        f"Session '{key}' loaded successfully for user '{session_id}'.",
+        False,
+        json.dumps(session),
+        json.dumps(meta_data),
+        working_data,
+    )
+
+
+# STORE SESSION IN REDIS
+@app.callback(
+    Output("save-session-output", "children"),
+    Output("clear-save-output", "disabled"),
+    Input("redis-save-button", "n_clicks"),
+    State("session", "data"),
+    State("user-session-id", "value"),
+    State("user-redis-key-text", "value"),
+    prevent_initial_call=True,
+)
+def save_session_data_to_redis(n_clicks, session, session_id, key):
+    if session is None or session_id is None or key is None or len(key) == 0:
+        return "No session data to save or missing session ID/key.", False
+    print(f"Saving session - User: {session_id}, Session: {key}")
+    try:
+        save_to_redis(session_id, key, session)
+        print(f"Session saved successfully: {key}")
+        return f"Session '{key}' saved successfully for user '{session_id}'.", False
+    except Exception as e:
+        print(f"Error saving session to Redis: {e}")
+        return f"Error saving session: {e}", False
+
+
+# DOWNLOAD SESSION AS JSON
+@app.callback(
+    Output("download-session-json", "data"),
+    Input("download-session-button", "n_clicks"),
+    State("session", "data"),
+    prevent_initial_call=True,
+)
+def download_session_as_json(n_clicks, session):
+    if session is None:
+        return dash.no_update
+    print("Downloading session as JSON...")
+    return dcc.send_string(
+        session, filename="session_data.json", mime_type="application/json"
+    )
+
+
+# CLEAR SAVE OUTPUT
+@app.callback(
+    Output("save-session-output", "children", allow_duplicate=True),
+    Output("clear-save-output", "disabled", allow_duplicate=True),
+    Input("clear-save-output", "n_intervals"),
+    prevent_initial_call=True,
+)
+def clear_save_message(n):
+    return None, True  # Clear and disable interval
+
+
+# GENERATE DATA RANGE SLIDER
 @app.callback(
     Output("date-range-slider", "min"),
     Output("date-range-slider", "max"),
     Output("date-range-slider", "marks"),
     Output("date-range-slider", "value"),
-    Input("master-data", "data"),
-    State("meta-data", "data"),
+    Input("session", "data"),
     prevent_initial_call=True,
 )
-def update_date_range_slider(master_data, meta_data):
-    if master_data is None or meta_data is None:
-        return 0, 1, {}, [0, 1]
-    meta_data = json.loads(meta_data)
-    master_data = json.loads(master_data)
-    df_master = json_to_pandas(
-        master_data, "df_master", meta_data["cols_key_meta"]["date"]
-    )
-    date_min = int(df_master[meta_data["cols_key_meta"]["date"]].dt.year.min())
-    date_max = int(df_master[meta_data["cols_key_meta"]["date"]].dt.year.max())
+def update_date_range_slider(session):
+    if session is None:
+        return 0, 0, {}, [0, 0]
+    session = json.loads(session)
+    col_date = session["meta_data"]["cols_key_meta"]["date"]
+    df_master = json_to_pandas(session, "df_master", col_date)
+    date_min = int(df_master[col_date].dt.year.min())
+    date_max = int(df_master[col_date].dt.year.max())
     marks = {i: str(i) for i in range(date_min, date_max + 1, 5)}
     marks[date_max] = str(date_max)
+    print(f"Date range: {date_min} - {date_max}, Marks: {marks}")
     return date_min, date_max, marks, [date_min, date_max]
 
 
+# GENERATE DROPDOWNS FOR GROUPS
 @app.callback(
     [
         Output("map-group-dropdown", "options"),
@@ -127,26 +242,33 @@ def update_date_range_slider(master_data, meta_data):
         Output("plot-group-dropdown-1", "value"),
         Output("plot-group-dropdown-2", "options"),
         Output("plot-group-dropdown-2", "value"),
+        Output("feature-selection-dropdown", "options"),
+        Output("feature-selection-dropdown", "value"),
+        Output("loc-id-dropdown", "options"),
+        Output("loc-id-dropdown", "value"),
+        Output("pmap-neighbors", "value"),
     ],
-    Input("meta-data", "data"),
+    Input("session", "data"),
     prevent_initial_call=True,
 )
-def update_dropdowns(meta_data):
-    if meta_data is None:
-        return [], [], [], [], [], []
-    meta_data = json.loads(meta_data)
-    dict_generic_colors = meta_data["dict_generic_colors"]
-    # col_date = meta_data["cols_key_meta"]["date"]
-    cols_plot_groups = list(dict_generic_colors.keys())
-    # cols_map_groups = cols_plot_groups.copy()
-    # cols_map_groups.remove(col_date)
+def update_dropdowns(session):
+    if session is None:
+        return [], [], [], [], [], [], [], [], [], []
+    session = json.loads(session)
+    plotting_data = session["plotting_data"]
+    print("Updating dropdowns with session data...")
     return (
-        cols_plot_groups,
-        cols_plot_groups[0],
-        cols_plot_groups,
-        cols_plot_groups[0],
-        cols_plot_groups,
-        cols_plot_groups[0],
+        plotting_data["map_group_dropdown_options"],
+        plotting_data["map_group_dropdown_value"],
+        plotting_data["plot_group_dropdown_1_options"],
+        plotting_data["plot_group_dropdown_1_value"],
+        plotting_data["plot_group_dropdown_2_options"],
+        plotting_data["plot_group_dropdown_2_value"],
+        plotting_data["feature_selection_dropdown_options"],
+        plotting_data["feature_selection_dropdown_value"],
+        plotting_data["loc_id_dropdown_options"],
+        plotting_data["loc_id_dropdown_value"],
+        plotting_data["pmap_neighbors"],  # Default value for neighbors
     )
 
 
@@ -159,7 +281,8 @@ def update_dropdowns(meta_data):
 )
 @callback_prevent_initial_output
 def update_map(map_group, meta_data):
-    if meta_data is None:
+    if meta_data is None or not map_group:
+        print("No meta_data or map_group provided, returning empty figure.")
         return empty_fig()
     meta_data = json.loads(meta_data)
 
@@ -177,40 +300,43 @@ def update_map(map_group, meta_data):
     return fig
 
 
+# PROCESS WORKING DATA
 @app.callback(
     Output("working-data", "data"),
+    Output("session", "data", allow_duplicate=True),
     [
         Input(component_id="apply-button", component_property="n_clicks"),
     ],
     [
-        State("master-data", "data"),
-        State("meta-data", "data"),
-        State("data-hash", "data"),
+        State("session", "data"),
         State(component_id="feature-selection-dropdown", component_property="value"),
         State(component_id="loc-id-dropdown", component_property="value"),
         State(component_id="pmap-neighbors", component_property="value"),
+        State("map-group-dropdown", "value"),
+        State("plot-group-dropdown-1", "value"),
+        State("plot-group-dropdown-2", "value"),
     ],
+    prevent_initial_call=True,
 )
 @callback_prevent_initial_output
 def process_working_data(
     n_clicks,
-    master_data,
-    meta_data,
-    data_hash,
+    session,
     feature_selection,
     loc_id_selection,
     n_neighbors,
+    map_group,
+    plot_group_1,
+    plot_group_2,
 ):
-    if master_data is None or meta_data is None:
-        return None
+    if session is None:
+        return None, dash.no_update
     if not feature_selection or not loc_id_selection:
-        return None
-    master_data = json.loads(master_data)
+        return None, dash.no_update
 
-    meta_data = json.loads(meta_data)
-    df_master = json_to_pandas(
-        master_data, "df_master", meta_data["cols_key_meta"]["date"]
-    )
+    session = json.loads(session)
+    meta_data = session["meta_data"]
+    df_master = json_to_pandas(session, "df_master", meta_data["cols_key_meta"]["date"])
     cols_meta = meta_data["cols_key_plot"]["meta"]
     cols_numeric_simple = meta_data["cols_key_plot"]["numeric_simple"]
     cols_numeric_clr = meta_data["cols_key_plot"]["numeric_clr"]
@@ -226,17 +352,20 @@ def process_working_data(
         n_neighbors,
     )
 
-    dict_working_data = {
-        "df_plot_pca": pandas_to_json(
-            plot_components_pca[0], meta_data["cols_key_meta"]["date"]
-        ),
-        "ldg_df": plot_components_pca[1].to_json(),
-        "expl_var": plot_components_pca[2],
-        "df_plot_pmap": pandas_to_json(
-            plot_components_pmap, meta_data["cols_key_meta"]["date"]
-        ),
+    dict_working_data = SessionManager.package_plotting_data(
+        plot_components_pca, plot_components_pmap, meta_data
+    )
+    session["working_data"] = dict_working_data
+    dct_plotting_data = {
+        "feature_selection_dropdown_value": feature_selection,
+        "loc_id_dropdown_value": loc_id_selection,
+        "map_group_dropdown_value": map_group,
+        "plot_group_dropdown_1_value": plot_group_1,
+        "plot_group_dropdown_2_value": plot_group_2,
+        "pmap_neighbors": n_neighbors,
     }
-    return json.dumps(dict_working_data)
+    session["plotting_data"].update(dct_plotting_data)
+    return json.dumps(dict_working_data), json.dumps(session)
 
 
 # grab the selected data from the map and update the loc_id-dropdown
@@ -276,7 +405,6 @@ def update_loc_id_dropdown(n_clicks, selectedData, meta_data):
     ],
     prevent_initial_call=True,
 )
-# @callback_prevent_initial_output  # this is stopping the plots from updating when deselect all
 def plot_data(
     working_data,
     selectedData,
@@ -290,6 +418,7 @@ def plot_data(
     if working_data is None:
         return DataPlotter.empty_figs()
 
+    print("Plotting data...")
     data_plotter = DataPlotter(
         working_data,
         meta_data,
@@ -305,4 +434,5 @@ def plot_data(
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
 # port = 8050
 # if __name__ == "__main__":
-#     app.run_server(debug=False, port=port)
+#     # app.run_server(debug=False, port=port)
+#     app.run_server(debug=True, port=port)
