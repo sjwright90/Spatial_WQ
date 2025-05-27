@@ -215,7 +215,9 @@ def create_page_map():
             dcc.Store(id="data-hash"),
             dcc.Store(id="master-data"),
             dcc.Store(id="meta-data"),
-            dcc.Store(id="working-data"),
+            dcc.Store(
+                id="working-data"
+            ),  # TODO: consider using 'session' storage for plotting data to reduce parsing/unparsing JSON each time plot is updated
             dcc.Store(id="side_click"),
             navbar,
             sidebar,

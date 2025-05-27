@@ -131,6 +131,7 @@ def find_make_color_dict(df, col_plot_group):
         Dictionary with the plotting groups as keys and the colors as values.
     """
     _col_prefix = col_plot_group.split("_LABELS")[0]
+    # TODO: pass label names downstream, similar to what is done with "analytes"
     _col_predefined_color = df.filter(regex=f"^{_col_prefix}_COLORS$").columns.to_list()
     if len(_col_predefined_color) == 0:
         _dict_color = make_color_dict(df, col_plot_group)
