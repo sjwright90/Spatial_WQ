@@ -28,12 +28,48 @@ class TestDataPreprocessor(unittest.TestCase):
         self.assertIsInstance(preprocessor.loc_id_all, list)
         self.assertIsInstance(preprocessor.cols_numeric_all, list)
 
-    def test_generate_dict_data_structure(self):
+    # THIS IS GONE IN THE NEW VERSION
+    # def test_generate_dict_data_structure(self):
+    #     preprocessor = DataPreprocessor(self.content_string)
+    #     data_structure = preprocessor.generate_dict_data_structure()
+    #     self.assertEqual(len(data_structure), 3)
+    #     for item in data_structure:
+    #         self.assertIsInstance(json.loads(item), dict)
+
+    def test_get_session_dict(self):
         preprocessor = DataPreprocessor(self.content_string)
-        data_structure = preprocessor.generate_dict_data_structure()
-        self.assertEqual(len(data_structure), 3)
-        for item in data_structure:
-            self.assertIsInstance(json.loads(item), dict)
+        session_dict = preprocessor.get_session_dict()
+
+        # Check top-level keys
+        expected_keys = {
+            "df_master",
+            "meta_data",
+            "data_hash",
+            "working_data",
+            "plotting_data",
+            "version",
+        }
+        self.assertTrue(expected_keys.issubset(session_dict.keys()))
+
+        # Check data types
+        self.assertIsInstance(session_dict["df_master"], str)  # JSON string
+        self.assertIsInstance(session_dict["meta_data"], dict)
+        self.assertIsInstance(session_dict["data_hash"], dict)
+        self.assertIsNone(session_dict["working_data"])
+        self.assertIsInstance(session_dict["plotting_data"], dict)
+        self.assertEqual(session_dict["version"], 1)
+
+        # Check nested values in plotting_data
+        plotting_data = session_dict["plotting_data"]
+        self.assertEqual(
+            plotting_data["feature_selection_dropdown_options"],
+            preprocessor.cols_key_plot["numeric_all"],
+        )
+        self.assertEqual(
+            plotting_data["map_group_dropdown_value"],
+            preprocessor.cols_key_meta["plotting_groups"][0],
+        )
+        self.assertEqual(plotting_data["pmap_neighbors"], 15)
 
 
 class TestDataPlotter(unittest.TestCase):

@@ -67,12 +67,7 @@ def get_key_cols_meta(df):
     """
     col_loc_id = df.filter(regex=r"^LOCATION-ID_").columns.to_list()[0]
     col_date = df.filter(regex=r"^DATETIME$").columns.to_list()
-    # EDITS
     cols_plot_groups = df.filter(regex=r"^LABELS_[0-9A-Za-z]*$").columns.to_list()
-    # For backwards compatibility
-
-    # will use this to then populate n color dictionaries
-    # and pass them around for color mapping
     if len(col_date) == 0:
         col_date = None
     else:
@@ -84,6 +79,57 @@ def get_key_cols_meta(df):
         cols_plot_groups,
         col_long_lat,
     )
+
+
+# TODO: DEVELOP THIS FUNCTION TO REPLACE THE TWO RENAME FUNCTIONS BELOW
+# def rename_columns_by_substring_split(
+#     df, columns_to_rename, split_token, return_updated_lists=None
+# ):
+#     """
+#     Rename columns by splitting on a token and keeping the suffix.
+#     Also returns updated versions of specified lists of columns with new names.
+
+#     Parameters
+#     ----------
+#     df : pandas.DataFrame
+#         DataFrame with original column names.
+
+#     columns_to_rename : list of str
+#         Columns to rename using the split_token rule.
+
+#     split_token : str
+#         Substring to split on (e.g., 'LABELS_' or '-ANALYTE_').
+
+#     return_updated_lists : list of list of str, optional
+#         Lists of column names (subsets of columns_to_rename) to return with updated names.
+
+#     Returns
+#     -------
+#     renamed_df : pandas.DataFrame
+#         DataFrame with renamed columns.
+
+#     new_column_names : list of str
+#         New column names resulting from the renaming.
+
+#     updated_lists : list of list of str, optional
+#         Updated versions of input column lists (if provided).
+#     """
+#     rename_dict = {col: col.split(split_token)[-1] for col in columns_to_rename}
+#     renamed_df = df.rename(columns=rename_dict)
+#     new_column_names = list(rename_dict.values())
+
+#     updated_lists = None
+#     if return_updated_lists is not None:
+#         updated_lists = []
+#         for lst in return_updated_lists:
+#             updated = [rename_dict[col] for col in lst if col in rename_dict]
+#             updated_lists.append(updated)
+
+#     return (
+#         (renamed_df, new_column_names, updated_lists)
+#         if updated_lists
+#         else (renamed_df, new_column_names)
+#     )
 
 
 def rename_cols_plot_groups(df, cols_plot_groups, cols_key_plot_meta):
@@ -109,6 +155,34 @@ def rename_cols_plot_groups(df, cols_plot_groups, cols_key_plot_meta):
         df.rename(columns=_dict_rename),
         list(_dict_rename.values()),
         cols_key_plot_meta,
+    )
+
+
+def rename_cols_analyte(df, cols_numeric_all, cols_numeric_simple, cols_numeric_clr):
+    """
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The input DataFrame whose columns need to be renamed.
+    cols_numeric_all : list of str
+        A list of column names to be renamed and updated.
+    cols_numeric_simple : list of str
+        A subset of `cols_numeric_all` to be renamed and updated.
+    cols_numeric_clr : list of str
+        Another subset of `cols_numeric_all` to be renamed and updated.
+    Returns
+    -------
+    tuple
+        A tuple containing:
+    """
+    dict_rename = {col: col.split("-ANALYTE_")[-1] for col in cols_numeric_all}
+    cols_numeric_all = [dict_rename[col] for col in cols_numeric_all]
+    cols_numeric_simple = [dict_rename[col] for col in cols_numeric_simple]
+    cols_numeric_clr = [dict_rename[col] for col in cols_numeric_clr]
+    return df.rename(columns=dict_rename), (
+        cols_numeric_all,
+        cols_numeric_simple,
+        cols_numeric_clr,
     )
 
 
@@ -264,34 +338,6 @@ def get_key_cols_plot(df):
     cols_numeric_all = cols_simple + cols_clr
     cols_meta = df.columns.difference(cols_numeric_all).to_list()
     return cols_meta, cols_numeric_all, cols_simple, cols_clr
-
-
-def rename_cols_analyte(df, cols_numeric_all, cols_numeric_simple, cols_numeric_clr):
-    """
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        The input DataFrame whose columns need to be renamed.
-    cols_numeric_all : list of str
-        A list of column names to be renamed and updated.
-    cols_numeric_simple : list of str
-        A subset of `cols_numeric_all` to be renamed and updated.
-    cols_numeric_clr : list of str
-        Another subset of `cols_numeric_all` to be renamed and updated.
-    Returns
-    -------
-    tuple
-        A tuple containing:
-    """
-    dict_rename = {col: col.split("-ANALYTE_")[-1] for col in cols_numeric_all}
-    cols_numeric_all = [dict_rename[col] for col in cols_numeric_all]
-    cols_numeric_simple = [dict_rename[col] for col in cols_numeric_simple]
-    cols_numeric_clr = [dict_rename[col] for col in cols_numeric_clr]
-    return df.rename(columns=dict_rename), (
-        cols_numeric_all,
-        cols_numeric_simple,
-        cols_numeric_clr,
-    )
 
 
 def extract_coordinate_dataframe(

@@ -4,6 +4,8 @@ import json
 
 import dash
 from dash.dependencies import Input, Output, State
+from dash import ctx
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 from dash import html, dcc
 from flask import Flask
@@ -72,23 +74,81 @@ def toggle_sidebar(n, nclick):
 
 
 # IMPORT DATA FROM .CSV
+# @app.callback(
+#     Output("meta-data", "data"),  # still needed
+#     Output("session", "data"),
+#     Output("working-data", "data", allow_duplicate=True),  # need to clear output
+#     Input("upload-data", "contents"),
+#     prevent_initial_call=True,
+# )
+# def process_data(contents):
+#     if contents is None:
+#         return None, None, None  # No data to process
+#     content_type, content_string = contents.split(",")
+#     data_preprocessor = DataPreprocessor(content_string)
+#     session_dict = data_preprocessor.get_session_dict()
+#     return (
+#         json.dumps(session_dict["meta_data"]),
+#         json.dumps(session_dict),
+#         None,  # Clear working data on new upload
+#     )
+
+
 @app.callback(
-    Output("meta-data", "data"),  # still needed
+    Output("meta-data", "data"),
     Output("session", "data"),
-    Output("working-data", "data", allow_duplicate=True),  # need to clear output
+    Output("working-data", "data", allow_duplicate=True),
+    Output("global-alert-container", "children"),  # ← NEW OUTPUT
     Input("upload-data", "contents"),
     prevent_initial_call=True,
 )
 def process_data(contents):
     if contents is None:
-        return None, None, None, [], [], [], []
+        raise PreventUpdate
     content_type, content_string = contents.split(",")
     data_preprocessor = DataPreprocessor(content_string)
     session_dict = data_preprocessor.get_session_dict()
+
+    alerts = []
+    results = data_preprocessor.run_all_checks()
+    if results["lat_lon_check"]:
+        alerts.append("❌ Some lat/lon values are out of bounds.")
+    if results["numeric_no_nan_check"]:
+        alerts.append("❌ Missing values found in numeric columns.")
+    if results["clr_columns_positive_check"]:
+        alerts.append("❌ CLR values must be real and > 0.")
+    if len(results["color_columns_check"]) > 0:
+        invalids_string = ", ".join(results["color_columns_check"])
+        alerts.append(
+            f"❌ Some color codes are not valid hex values. Must start with '#' only including 0-9 and letters a-f. Bad codes: {invalids_string}"
+        )
+
+    if alerts:
+        alert = dbc.Alert(
+            " ".join(alerts),
+            color="danger",
+            dismissable=True,
+            duration=10000,  # 10 seconds
+        )
+        return (
+            None,
+            None,
+            None,  # Clear working data on new upload
+            alert,  # Return the alert with all issues
+        )
+    else:
+        alert = dbc.Alert(
+            "✅ All data QA/QC checks passed successfully!",
+            color="success",
+            dismissable=True,
+            duration=5000,  # 5 seconds
+        )
+
     return (
         json.dumps(session_dict["meta_data"]),
         json.dumps(session_dict),
-        None,  # Clear working data on new upload
+        None,
+        alert,
     )
 
 
@@ -232,7 +292,6 @@ def update_date_range_slider(session):
     date_max = int(df_master[col_date].dt.year.max())
     marks = {i: str(i) for i in range(date_min, date_max + 1, 5)}
     marks[date_max] = str(date_max)
-    print(f"Date range: {date_min} - {date_max}, Marks: {marks}")
     return date_min, date_max, marks, [date_min, date_max]
 
 
@@ -256,10 +315,9 @@ def update_date_range_slider(session):
 )
 def update_dropdowns(session):
     if session is None:
-        return [], [], [], [], [], [], [], [], [], []
+        return [], [], [], [], [], [], [], [], [], [], []
     session = json.loads(session)
     plotting_data = session["plotting_data"]
-    print("Updating dropdowns with session data...")
     return (
         plotting_data["map_group_dropdown_options"],
         plotting_data["map_group_dropdown_value"],
@@ -280,13 +338,16 @@ def update_dropdowns(session):
     Output("map", "figure"),
     [Input("map-group-dropdown", "value")],
     [Input("meta-data", "data")],
+    State("map-relayout-store", "data"),
     prevent_initial_call=True,
 )
 @callback_prevent_initial_output
-def update_map(map_group, meta_data):
+def update_map(map_group, meta_data, relayoutData):
     if meta_data is None or not map_group:
-        print("No meta_data or map_group provided, returning empty figure.")
         return empty_fig()
+    # find what is triggering the callback
+    ctx_call = ctx.triggered_id
+
     meta_data = json.loads(meta_data)
 
     df_coords = pd.read_json(io.StringIO(meta_data["df_coordinate"]))
@@ -300,7 +361,31 @@ def update_map(map_group, meta_data):
         "hover_name": meta_data["cols_key_meta"]["loc_id"],
     }
     fig = make_map(df_coords, **dict_kwargs_map)
+    if ctx_call == "map-group-dropdown" and relayoutData:
+        allowed_relayout_keys = {
+            "mapbox.center",
+            "mapbox.zoom",
+            "mapbox.bearing",
+            "mapbox.pitch",
+        }
+        relayoutData = {
+            k: v for k, v in relayoutData.items() if k in allowed_relayout_keys
+        }
+        if relayoutData:
+            fig.update_layout(relayoutData)
     return fig
+
+
+# STORE THE MAP RELAYOUT DATA
+@app.callback(
+    Output("map-relayout-store", "data"),
+    Input("map", "relayoutData"),
+    prevent_intial_call=True,
+)
+def store_map_relayout_data(relayoutData):
+    if relayoutData is None:
+        return dash.no_update
+    return relayoutData
 
 
 # PROCESS WORKING DATA
@@ -434,7 +519,7 @@ def plot_data(
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-# port = 8050
-# if __name__ == "__main__":
-#     # app.run_server(debug=False, port=port)
-#     app.run_server(debug=True, port=port)
+port = 8050
+if __name__ == "__main__":
+    # app.run_server(debug=False, port=port)
+    app.run_server(debug=True, port=port)

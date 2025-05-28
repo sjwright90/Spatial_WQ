@@ -72,3 +72,12 @@ CHECK_BOX_STYLE = {
     "padding": "0px 10px",
     "font-size": "20px",
 }
+
+ALERT_STYLE = {
+    "position": "fixed",
+    "top": "80px",  # adjust to appear just below navbar
+    "right": "20px",
+    "zIndex": 1050,  # higher than most elements
+    "width": "auto",
+    "maxWidth": "400px",
+}

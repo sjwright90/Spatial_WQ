@@ -188,6 +188,7 @@ map_div = html.Div(
         dcc.Graph(
             id="map",
             config={"scrollZoom": True, "displayModeBar": True},
+            relayoutData=None,
         ),
     ],
     className="d-flex flex-row",
@@ -266,6 +267,12 @@ selector_div = html.Div(
     ],
 )
 
+floating_alert_container = html.Div(
+    id="global-alert-container",
+    children=[],
+    style=ALERT_STYLE,
+)
+
 main_content = html.Div(
     children=[
         uploaders,
@@ -290,8 +297,10 @@ def create_page_map():
                 id="working-data"
             ),  # TODO: consider using 'session' storage for plotting data to reduce parsing/unparsing JSON each time plot is updated
             dcc.Store(id="side_click"),
+            dcc.Store(id="map-relayout-store"),
             navbar,
             sidebar,
+            floating_alert_container,
             main_content,
         ],
     )

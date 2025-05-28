@@ -52,7 +52,6 @@ def make_map(df, **kwargs):
         "lat": "LATITUDE",
         "lon": "LONGITUDE",
         "hover_data": {},
-        # "zoom": 12,
         "size": "MAP-MARKER-SIZE",
         "size_max": 8,
         "opacity": 1,

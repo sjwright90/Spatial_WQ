@@ -20,6 +20,7 @@ import pandas as pd
 import base64
 import io
 import json
+import re
 
 from datetime import datetime
 
@@ -63,7 +64,7 @@ class DataPreprocessor:
         # we will do a search on the old regex
         bn_label_format_new = True
         if len(self.cols_key_meta["plotting_groups"]) == 0:
-            print("Old format detected, using regex to find plotting groups.")
+            print("Old 'LABELS' format detected for plot groups.")
             cols_plot_groups = self.df_master.filter(
                 regex=r"^PLOTTING-GROUPS-DOMAIN-[0-9]{1,2}_LABELS$"
             ).columns.to_list()
@@ -118,6 +119,49 @@ class DataPreprocessor:
         self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
         self.cols_numeric_all = self.cols_key_plot["numeric_all"]
 
+    def check_lat_lon(self):
+        col_long = self.cols_key_meta["long_lat"][0]
+        col_lat = self.cols_key_meta["long_lat"][1]
+        bad_long = self.df_master[col_long].isna() | (
+            self.df_master[col_long].abs().gt(180)
+        )
+        bad_lat = self.df_master[col_lat].isna() | (
+            self.df_master[col_lat].abs().gt(90)
+        )
+        return (bad_long | bad_lat).any()
+
+    def check_numeric_no_nan(self):
+        return self.df_master[self.cols_key_plot["numeric_all"]].isna().any().any()
+
+    def check_clr_columns_positive(self):
+        return self.df_master[self.cols_key_plot["numeric_clr"]].le(0).any().any()
+
+    def check_color_columns(self):
+        color_cols = self.df_master.filter(
+            regex=r"COLORS"
+        ).columns  # for backwards compatibility just look for COLORS in the column names
+        hex_pattern = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+        def is_valid_hex(s):
+            return bool(hex_pattern.fullmatch(str(s)))
+
+        invalids = set()
+        for col in color_cols:
+            invalid_uniques = self.df_master[~self.df_master[col].map(is_valid_hex)][
+                col
+            ].unique()
+            if len(invalid_uniques) > 0:
+                invalids.update(invalid_uniques)
+        return invalids
+
+    def run_all_checks(self):
+        results = {}
+        results["lat_lon_check"] = self.check_lat_lon()
+        results["numeric_no_nan_check"] = self.check_numeric_no_nan()
+        results["clr_columns_positive_check"] = self.check_clr_columns_positive()
+        results["color_columns_check"] = self.check_color_columns()
+        return results
+
     def get_session_dict(self):
         return {
             "df_master": pandas_to_json(self.df_master, self.cols_key_meta["date"]),
@@ -149,33 +193,6 @@ class DataPreprocessor:
             },
             "version": 1,
         }
-
-    # def generate_dict_data_structure(self):
-    #     return (
-    #         json.dumps(
-    #             {
-    #                 "df_master": pandas_to_json(
-    #                     self.df_master, self.cols_key_meta["date"]
-    #                 ),
-    #             }
-    #         ),
-    #         json.dumps(
-    #             {
-    #                 "cols_key_plot": self.cols_key_plot,
-    #                 "cols_key_meta": self.cols_key_meta,
-    #                 "dict_marker_map": self.dict_marker_map,
-    #                 "dict_generic_colors": self.dict_generic_colors,
-    #                 "loc_id_all": self.loc_id_all,
-    #                 "cols_numeric_all": self.cols_numeric_all,
-    #                 "df_coordinate": self.df_coordinate.to_json(),
-    #             },
-    #         ),
-    #         json.dumps(
-    #             {
-    #                 "data_hash": self.content_hash,
-    #             }
-    #         ),
-    #     )
 
 
 class DataPlotter:

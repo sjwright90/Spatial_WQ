@@ -12,6 +12,7 @@ from app.src.data_process import (
     make_plotting_group_color_dicts,
     set_key_col_date,
     get_key_cols_plot,
+    rename_cols_plot_groups,
     rename_cols_analyte,
     extract_coordinate_dataframe,
     subset_df_locIds,
@@ -19,6 +20,7 @@ from app.src.data_process import (
     pandas_to_json,
     json_to_pandas,
     pc_scaler,
+    make_df_for_biplot,
 )
 
 
@@ -29,7 +31,7 @@ class TestDataProcess(unittest.TestCase):
             {
                 "LOCATION-ID_1": [1, 2, 3],
                 "DATETIME": ["2023-01-01", "2023-01-02", "2023-01-03"],
-                "PLOTTING-GROUPS-DOMAIN-1_LABELS": ["A", "B", "A"],
+                "LABELS_PLOTTINGGROUP1": ["A", "B", "A"],
                 "MARKERS-PLOT-DOMAIN": [1, 2, 3],
                 "LONGITUDE": [10.5, -20.0, 30.0],
                 "LATITUDE": [50.0, 60.0, 70.1],
@@ -41,9 +43,7 @@ class TestDataProcess(unittest.TestCase):
         self.df["DATETIME"] = pd.to_datetime(self.df["DATETIME"])
 
     def test_df_col_group_to_dict(self):
-        result = df_col_group_to_dict(
-            self.df, "PLOTTING-GROUPS-DOMAIN-1_LABELS", "LOCATION-ID_1"
-        )
+        result = df_col_group_to_dict(self.df, "LABELS_PLOTTINGGROUP1", "LOCATION-ID_1")
         expected = {"A": 1, "B": 2}
         self.assertEqual(result, expected)
 
@@ -52,26 +52,24 @@ class TestDataProcess(unittest.TestCase):
         expected = (
             "LOCATION-ID_1",
             "DATETIME",
-            ["PLOTTING-GROUPS-DOMAIN-1_LABELS"],
+            ["LABELS_PLOTTINGGROUP1"],
             ["LONGITUDE", "LATITUDE"],
         )
         self.assertEqual(result, expected)
 
     def test_make_color_dict(self):
-        result = make_color_dict(self.df, "PLOTTING-GROUPS-DOMAIN-1_LABELS")
+        result = make_color_dict(self.df, "LABELS_PLOTTINGGROUP1")
         self.assertIn("A", result)
         self.assertIn("B", result)
 
     def test_find_make_color_dict(self):
-        result = find_make_color_dict(self.df, "PLOTTING-GROUPS-DOMAIN-1_LABELS")
+        result = find_make_color_dict(self.df, "LABELS_PLOTTINGGROUP1")
         self.assertIn("A", result)
         self.assertIn("B", result)
 
     def test_make_plotting_group_color_dicts(self):
-        result = make_plotting_group_color_dicts(
-            self.df, ["PLOTTING-GROUPS-DOMAIN-1_LABELS"]
-        )
-        self.assertIn("PLOTTING-GROUPS-DOMAIN-1_LABELS", result)
+        result = make_plotting_group_color_dicts(self.df, ["LABELS_PLOTTINGGROUP1"])
+        self.assertIn("LABELS_PLOTTINGGROUP1", result)
 
     def test_set_key_col_date(self):
         df = self.df.copy()
@@ -83,18 +81,27 @@ class TestDataProcess(unittest.TestCase):
         expected = (
             [
                 "DATETIME",
+                "LABELS_PLOTTINGGROUP1",
                 "LATITUDE",
                 "LOCATION-ID_1",
                 "LONGITUDE",
                 "MAP-MARKER-SIZE",
                 "MARKERS-PLOT-DOMAIN",
-                "PLOTTING-GROUPS-DOMAIN-1_LABELS",
             ],
             ["NUMERIC-ANALYTE_Y", "CLR-ANALYTE_X"],
             ["NUMERIC-ANALYTE_Y"],
             ["CLR-ANALYTE_X"],
         )
         self.assertEqual(result, expected)
+
+    def test_rename_cols_plot_groups(self):
+        df = self.df.copy()
+        renamed_df, new_names, renamed_meta = rename_cols_plot_groups(
+            df, ["LABELS_PLOTTINGGROUP1"], ["LABELS_PLOTTINGGROUP1"]
+        )
+        self.assertIn("PLOTTINGGROUP1", renamed_df.columns)
+        self.assertEqual(new_names, ["PLOTTINGGROUP1"])
+        self.assertEqual(renamed_meta, ["PLOTTINGGROUP1"])
 
     def test_rename_cols_analyte(self):
         df, (cols_all, cols_simple, cols_clr) = rename_cols_analyte(
@@ -109,7 +116,7 @@ class TestDataProcess(unittest.TestCase):
     def test_extract_coordinate_dataframe(self):
         result = extract_coordinate_dataframe(
             self.df,
-            ["PLOTTING-GROUPS-DOMAIN-1_LABELS"],
+            ["LABELS_PLOTTINGGROUP1"],
             "LOCATION-ID_1",
             "LONGITUDE",
             "LATITUDE",
@@ -157,6 +164,19 @@ class TestDataProcess(unittest.TestCase):
         # should return the same series
         scaled_zero_range_data = pc_scaler(zero_range_data)
         pd.testing.assert_series_equal(scaled_zero_range_data, zero_range_data)
+
+    def test_make_df_for_biplot(self):
+        from numpy import array
+
+        df = self.df.copy()
+        trnf_data = array([[1, 2], [3, 4], [5, 6]])
+        biplot_df = make_df_for_biplot(
+            trnf_data, df, col_list=["LABELS_PLOTTINGGROUP1"], num_comp=2
+        )
+        self.assertIn("PC1", biplot_df.columns)
+        self.assertIn("PC2", biplot_df.columns)
+        self.assertIn("LABELS_PLOTTINGGROUP1", biplot_df.columns)
+        self.assertEqual(biplot_df.shape[1], 3)
 
 
 if __name__ == "__main__":
