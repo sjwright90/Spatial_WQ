@@ -22,6 +22,8 @@ r = redis.Redis(connection_pool=pool)
 def save_to_redis(session_id: str, key: str, value: str) -> None:
     """Save value under a hash for a specific session ID."""
     r.hset(f"session:{session_id}", key, value)
+    # set TTL for 1 week (604800 seconds)
+    r.expire(f"session:{session_id}", 604800)
 
 
 def load_from_redis(session_id: str, key: str) -> str:

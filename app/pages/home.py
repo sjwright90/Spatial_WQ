@@ -129,7 +129,7 @@ download_button = html.Div(
     children=[
         dcc.Download(id="download-session-json"),
         html.Button(
-            "Download session as JSON",
+            "Download JSON",
             id="download-session-button",
             style=BUTTON_STYLE,
         ),

@@ -177,7 +177,10 @@ def save_session_data_to_redis(n_clicks, session, session_id, key):
     try:
         save_to_redis(session_id, key, session)
         print(f"Session saved successfully: {key}")
-        return f"Session '{key}' saved successfully for user '{session_id}'.", False
+        return (
+            f"Session '{key}' saved successfully for user '{session_id}'.\nExpires in 1 week.",
+            False,
+        )
     except Exception as e:
         print(f"Error saving session to Redis: {e}")
         return f"Error saving session: {e}", False
@@ -418,7 +421,6 @@ def plot_data(
     if working_data is None:
         return DataPlotter.empty_figs()
 
-    print("Plotting data...")
     data_plotter = DataPlotter(
         working_data,
         meta_data,

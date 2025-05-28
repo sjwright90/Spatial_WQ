@@ -3,6 +3,7 @@
 # Functions
 # ---------
 # get_key_cols_meta
+# rename_cols_plot_groups
 # get_key_cols_plot
 # rename_cols_analyte
 # extract_coordinate_dataframe
@@ -66,9 +67,10 @@ def get_key_cols_meta(df):
     """
     col_loc_id = df.filter(regex=r"^LOCATION-ID_").columns.to_list()[0]
     col_date = df.filter(regex=r"^DATETIME$").columns.to_list()
-    cols_plot_groups = df.filter(
-        regex=r"^PLOTTING-GROUPS-DOMAIN-[0-9]{1,2}_LABELS$"
-    ).columns.to_list()
+    # EDITS
+    cols_plot_groups = df.filter(regex=r"^LABELS_[0-9A-Za-z]*$").columns.to_list()
+    # For backwards compatibility
+
     # will use this to then populate n color dictionaries
     # and pass them around for color mapping
     if len(col_date) == 0:
@@ -81,6 +83,32 @@ def get_key_cols_meta(df):
         col_date,
         cols_plot_groups,
         col_long_lat,
+    )
+
+
+def rename_cols_plot_groups(df, cols_plot_groups, cols_key_plot_meta):
+    """
+    Rename the plotting groups columns to a more readable format.
+
+    Parameters
+    ---------
+    df : pandas DataFrame
+        DataFrame to rename the plotting groups columns in.
+
+    cols_plot_groups : list
+        List of the plotting groups columns to rename.
+
+    Returns
+    -------
+    pandas DataFrame
+        DataFrame with the plotting groups columns renamed.
+    """
+    _dict_rename = {col: col.split("LABELS_")[-1] for col in cols_plot_groups}
+    cols_key_plot_meta = [col.replace("LABELS_", "") for col in cols_key_plot_meta]
+    return (
+        df.rename(columns=_dict_rename),
+        list(_dict_rename.values()),
+        cols_key_plot_meta,
     )
 
 
@@ -111,7 +139,7 @@ def make_color_dict(df, col_plot_group):
     return _dict_color
 
 
-def find_make_color_dict(df, col_plot_group):
+def find_make_color_dict(df, col_plot_group, new_format=True):
     """
     Find the color dictionary for the plotting groups. If it does not exist,
     make a new one.
@@ -124,15 +152,30 @@ def find_make_color_dict(df, col_plot_group):
     col_plot_group : str
         Column name to use for the plotting groups.
 
+    new_format : bool, default True
+        Whether to use the new format for the plotting groups.
+        If True, it will look for columns starting with "COLORS_".
+        If False, it will look for columns ending with "_COLORS".
+        For backwards compatibility only, will be removed in the future.
+
 
     Returns
     -------
     dict
         Dictionary with the plotting groups as keys and the colors as values.
     """
-    _col_prefix = col_plot_group.split("_LABELS")[0]
-    # TODO: pass label names downstream, similar to what is done with "analytes"
-    _col_predefined_color = df.filter(regex=f"^{_col_prefix}_COLORS$").columns.to_list()
+
+    if new_format:
+        _col_prefix = col_plot_group
+        _col_predefined_color = df.filter(
+            regex=f"^COLORS_{_col_prefix}$"
+        ).columns.to_list()
+    else:
+        _col_prefix = col_plot_group.split("_LABELS")[0]
+        _col_predefined_color = df.filter(
+            regex=f"^{_col_prefix}_COLORS$"
+        ).columns.to_list()
+
     if len(_col_predefined_color) == 0:
         _dict_color = make_color_dict(df, col_plot_group)
     else:
@@ -140,7 +183,7 @@ def find_make_color_dict(df, col_plot_group):
     return _dict_color
 
 
-def make_plotting_group_color_dicts(df, cols_plot_groups):
+def make_plotting_group_color_dicts(df, cols_plot_groups, new_format=True):
     """
     Create a dictionary of color dictionaries for the plotting groups and combine them.
 
@@ -152,6 +195,12 @@ def make_plotting_group_color_dicts(df, cols_plot_groups):
     cols_plot_groups : list
         List of the plotting groups columns.
 
+    new_format : bool, default True
+        Whether to use the new format for the plotting groups.
+        If True, it will look for columns starting with "COLORS_".
+        If False, it will look for columns ending with "_COLORS".
+        For backwards compatibility only, will be removed in the future.
+
     Returns
     -------
     dict
@@ -159,7 +208,7 @@ def make_plotting_group_color_dicts(df, cols_plot_groups):
     """
     _dict_col_colors = {}
     for col in cols_plot_groups:
-        _dict_col_colors[col] = find_make_color_dict(df, col)
+        _dict_col_colors[col] = find_make_color_dict(df, col, new_format=new_format)
     return _dict_col_colors
 
 

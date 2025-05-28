@@ -5,6 +5,7 @@ from .data_process import (
     df_col_group_to_dict,
     get_key_cols_meta,
     make_plotting_group_color_dicts,
+    rename_cols_plot_groups,
     extract_coordinate_dataframe,
     rename_cols_analyte,
     subset_df_locIds,
@@ -47,7 +48,6 @@ class DataPreprocessor:
         self.cols_key_plot["numeric_all"] = cols_key_plot_new[0]
         self.cols_key_plot["numeric_simple"] = cols_key_plot_new[1]
         self.cols_key_plot["numeric_clr"] = cols_key_plot_new[2]
-
         self.cols_key_meta = dict(
             zip(
                 [
@@ -59,6 +59,26 @@ class DataPreprocessor:
                 get_key_cols_meta(self.df_master),
             )
         )
+        # for backwards compatibility, if plotting_groups is empty
+        # we will do a search on the old regex
+        bn_label_format_new = True
+        if len(self.cols_key_meta["plotting_groups"]) == 0:
+            print("Old format detected, using regex to find plotting groups.")
+            cols_plot_groups = self.df_master.filter(
+                regex=r"^PLOTTING-GROUPS-DOMAIN-[0-9]{1,2}_LABELS$"
+            ).columns.to_list()
+            self.cols_key_meta["plotting_groups"] = cols_plot_groups
+            bn_label_format_new = False
+        else:
+            self.df_master, new_plotting_groups, self.cols_key_plot["meta"] = (
+                rename_cols_plot_groups(
+                    self.df_master,
+                    self.cols_key_meta["plotting_groups"],
+                    self.cols_key_plot["meta"],
+                )
+            )
+            self.cols_key_meta["plotting_groups"] = new_plotting_groups
+
         self.df_master = set_key_col_date(
             self.df_master,
             self.cols_key_meta["date"],
@@ -92,6 +112,7 @@ class DataPreprocessor:
         self.dict_generic_colors = make_plotting_group_color_dicts(
             self.df_master,
             self.cols_key_meta["plotting_groups"],
+            new_format=bn_label_format_new,  # this is for backwards compatibility, will remove in future versions
         )
 
         self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
