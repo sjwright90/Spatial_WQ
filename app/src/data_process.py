@@ -67,7 +67,7 @@ def get_key_cols_meta(df):
     """
     col_loc_id = df.filter(regex=r"^LOCATION-ID_").columns.to_list()[0]
     col_date = df.filter(regex=r"^DATETIME$").columns.to_list()
-    cols_plot_groups = df.filter(regex=r"^LABELS_[0-9A-Za-z]*$").columns.to_list()
+    cols_plot_groups = df.filter(regex=r"^LABELS_[0-9A-Za-z\s]*$").columns.to_list()
     if len(col_date) == 0:
         col_date = None
     else:
