@@ -2,24 +2,40 @@ import unittest
 import base64
 import json
 import pandas as pd
-import io
-from datetime import datetime
 from app.src.data_manager import DataPreprocessor, DataPlotter
+from app.src.data_model import ColumnMapping
+
+
+def encode_csv(csv_content: str) -> str:
+    return base64.b64encode(csv_content.encode()).decode()
 
 
 class TestDataPreprocessor(unittest.TestCase):
     def setUp(self):
-        # Sample CSV content encoded in base64
+        # Arbitrary column names - proves the old LOCATION-ID_/DATETIME/etc.
+        # prefix convention is no longer required.
         csv_content = (
-            "LOCATION-ID_1,DATETIME,PLOTTING-GROUPS-DOMAIN-1_LABELS,MARKERS-PLOT-DOMAIN,LONGITUDE,LATITUDE,CLR-ANALYTE_X,NUMERIC-ANALYTE_Y,MAP-MARKER-SIZE\n"
-            "1,2023-01-01,A,1,10.5,50.0,0.1,1,10\n"
-            "2,2023-01-02,B,2,-20.0,60.0,0.2,2,10\n"
-            "3,2023-01-03,A,3,30.0,70.1,0.3,3,10\n"
+            "Site_Name,Sample_Date,Group,Marker,Longitude,Latitude,Zinc,Copper,MarkerSize\n"
+            "1,2023-01-01,A,circle,10.5,50.0,0.1,1,10\n"
+            "2,2023-01-02,B,square,-20.0,60.0,0.2,2,10\n"
+            "3,2023-01-03,A,circle,30.0,70.1,0.3,3,10\n"
         )
-        self.content_string = base64.b64encode(csv_content.encode()).decode()
+        self.content_string = encode_csv(csv_content)
+        self.mapping = ColumnMapping(
+            location_id="Site_Name",
+            latitude="Latitude",
+            longitude="Longitude",
+            plotting_groups=["Group"],
+            numeric_simple=["Copper"],
+            numeric_clr=["Zinc"],
+            date="Sample_Date",
+            marker_symbol="Marker",
+            map_marker_size="MarkerSize",
+        )
 
     def test_initialization(self):
-        preprocessor = DataPreprocessor(self.content_string)
+        preprocessor = DataPreprocessor(self.content_string, self.mapping)
+        self.assertFalse(preprocessor.validation.has_errors)
         self.assertIsInstance(preprocessor.df_master, pd.DataFrame)
         self.assertIsInstance(preprocessor.cols_key_plot, dict)
         self.assertIsInstance(preprocessor.cols_key_meta, dict)
@@ -28,19 +44,10 @@ class TestDataPreprocessor(unittest.TestCase):
         self.assertIsInstance(preprocessor.loc_id_all, list)
         self.assertIsInstance(preprocessor.cols_numeric_all, list)
 
-    # THIS IS GONE IN THE NEW VERSION
-    # def test_generate_dict_data_structure(self):
-    #     preprocessor = DataPreprocessor(self.content_string)
-    #     data_structure = preprocessor.generate_dict_data_structure()
-    #     self.assertEqual(len(data_structure), 3)
-    #     for item in data_structure:
-    #         self.assertIsInstance(json.loads(item), dict)
-
     def test_get_session_dict(self):
-        preprocessor = DataPreprocessor(self.content_string)
+        preprocessor = DataPreprocessor(self.content_string, self.mapping)
         session_dict = preprocessor.get_session_dict()
 
-        # Check top-level keys
         expected_keys = {
             "df_master",
             "meta_data",
@@ -51,7 +58,6 @@ class TestDataPreprocessor(unittest.TestCase):
         }
         self.assertTrue(expected_keys.issubset(session_dict.keys()))
 
-        # Check data types
         self.assertIsInstance(session_dict["df_master"], str)  # JSON string
         self.assertIsInstance(session_dict["meta_data"], dict)
         self.assertIsInstance(session_dict["data_hash"], dict)
@@ -59,7 +65,6 @@ class TestDataPreprocessor(unittest.TestCase):
         self.assertIsInstance(session_dict["plotting_data"], dict)
         self.assertEqual(session_dict["version"], 1)
 
-        # Check nested values in plotting_data
         plotting_data = session_dict["plotting_data"]
         self.assertEqual(
             plotting_data["feature_selection_dropdown_options"],
@@ -71,16 +76,36 @@ class TestDataPreprocessor(unittest.TestCase):
         )
         self.assertEqual(plotting_data["pmap_neighbors"], 15)
 
+    def test_missing_required_role_leaves_validation_error_and_no_data(self):
+        bad_mapping = ColumnMapping(location_id="Site_Name", latitude="Latitude", longitude="")
+        preprocessor = DataPreprocessor(self.content_string, bad_mapping)
+        self.assertTrue(preprocessor.validation.has_errors)
+        self.assertIsNone(preprocessor.df_master)
+        self.assertIsNone(preprocessor.cols_key_plot)
+
+    def test_unmapped_marker_symbol_defaults_every_location(self):
+        mapping = ColumnMapping(
+            location_id="Site_Name",
+            latitude="Latitude",
+            longitude="Longitude",
+            plotting_groups=["Group"],
+            numeric_simple=["Copper"],
+        )
+        preprocessor = DataPreprocessor(self.content_string, mapping)
+        self.assertFalse(preprocessor.validation.has_errors)
+        self.assertEqual(set(preprocessor.dict_marker_map.keys()), set(preprocessor.loc_id_all))
+        self.assertTrue(all(v == "circle" for v in preprocessor.dict_marker_map.values()))
+
 
 class TestDataPlotter(unittest.TestCase):
     def setUp(self):
         _df_pca = pd.DataFrame(
             {
-                "LOCATION-ID_1": ["1A", "2B", "3C"],
-                "DATETIME": ["2023-01-01", "2023-01-02", "2023-01-03"],
-                "PLOTTING-GROUPS-DOMAIN-1_LABELS": ["A", "B", "A"],
-                "PLOTTING-GROUPS-DOMAIN-2_LABELS": ["A", "B", "A"],
-                "MARKERS-PLOT-DOMAIN": [1, 2, 3],
+                "Site_Name": ["1A", "2B", "3C"],
+                "Sample_Date": ["2023-01-01", "2023-01-02", "2023-01-03"],
+                "Group1": ["A", "B", "A"],
+                "Group2": ["A", "B", "A"],
+                "Marker": [1, 2, 3],
                 "PC1": [0.1, 0.2, 0.3],
                 "PC2": [0.4, 0.5, 0.6],
                 "date": ["2023-01-01", "2023-01-02", "2023-01-03"],
@@ -106,27 +131,18 @@ class TestDataPlotter(unittest.TestCase):
         self.meta_data = json.dumps(
             {
                 "cols_key_plot": {"numeric_all": ["value1", "value2"]},
-                "cols_key_meta": {"loc_id": "LOCATION-ID_1", "date": "date"},
+                "cols_key_meta": {"loc_id": "Site_Name", "date": "date"},
                 "dict_marker_map": {"1A": 1, "2B": 2, "3C": 3},
                 "dict_generic_colors": {
-                    "PLOTTING-GROUPS-DOMAIN-1_LABELS": {
-                        "A": "red",
-                        "B": "blue",
-                    },
-                    "PLOTTING-GROUPS-DOMAIN-2_LABELS": {
-                        "A": "green",
-                        "B": "yellow",
-                    },
+                    "Group1": {"A": "red", "B": "blue"},
+                    "Group2": {"A": "green", "B": "yellow"},
                 },
                 "loc_id_all": ["1A", "2B", "3C"],
             }
         )
         self.selected_loc_ids = {"points": [{"customdata": ["1A"]}]}
         self.selected_loc_ids_none = None
-        self.plot_groups = [
-            "PLOTTING-GROUPS-DOMAIN-1_LABELS",
-            "PLOTTING-GROUPS-DOMAIN-1_LABELS",
-        ]
+        self.plot_groups = ["Group1", "Group1"]
         self.date_range = [2023, 2023]
 
     def test_initialization(self):
@@ -186,6 +202,18 @@ class TestDataPlotter(unittest.TestCase):
         )
         fig_none = plotter_none.plot_pca()
         self.assertIsNotNone(fig_none)
+
+    def test_no_date_column_skips_date_filtering(self):
+        meta_data_no_date = json.loads(self.meta_data)
+        meta_data_no_date["cols_key_meta"]["date"] = None
+        plotter = DataPlotter(
+            self.working_data,
+            json.dumps(meta_data_no_date),
+            self.selected_loc_ids_none,
+            self.plot_groups,
+            self.date_range,
+        )
+        self.assertEqual(len(plotter.df_plot_pca), 3)
 
 
 if __name__ == "__main__":

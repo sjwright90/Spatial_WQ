@@ -1,17 +1,14 @@
 from .plotting import make_fig_pca, make_fig_pmap, empty_fig
 from .data_process import (
-    get_key_cols_plot,
-    set_key_col_date,
     df_col_group_to_dict,
-    get_key_cols_meta,
     make_plotting_group_color_dicts,
-    rename_cols_plot_groups,
     extract_coordinate_dataframe,
-    rename_cols_analyte,
     subset_df_locIds,
     pandas_to_json,
     json_to_pandas,
 )
+from .data_model import ColumnMapping
+from .data_mapping import build_mapped_dataset
 
 from .cache_initialize import generate_df_hash_version
 
@@ -20,74 +17,48 @@ import pandas as pd
 import base64
 import io
 import json
-import re
-
-from datetime import datetime
 
 
-# TODO: make date parsing more 'generous'
+DEFAULT_MARKER_SYMBOL = "circle"
+
+
 class DataPreprocessor:
-    def __init__(self, content_string):
+    """Ingests a raw uploaded CSV plus a user-supplied ColumnMapping (see
+    data_model.py) and builds the internal structures the rest of the app
+    consumes. Column classification is driven entirely by `mapping` -
+    see data_mapping.build_mapped_dataset for validation/coercion details.
+
+    If the mapping fails validation, `self.validation.has_errors` is True and
+    every other data attribute (`df_master`, `cols_key_plot`, `cols_key_meta`,
+    `df_coordinate`, `dict_marker_map`, `dict_generic_colors`, `loc_id_all`,
+    `cols_numeric_all`) is left as None - callers must check
+    `self.validation.has_errors` before calling `get_session_dict()`.
+    """
+
+    def __init__(self, content_string: str, mapping: ColumnMapping):
         decoded = base64.b64decode(content_string)
+        df_raw = pd.read_csv(io.BytesIO(decoded), float_precision="high")
 
-        self.df_master = pd.read_csv(io.BytesIO(decoded), float_precision="high")
-        # get hash of content
-        self.content_hash = generate_df_hash_version(self.df_master)
+        self.content_hash = generate_df_hash_version(df_raw)
 
-        self.cols_key_plot = dict(
-            zip(
-                ["meta", "numeric_all", "numeric_simple", "numeric_clr"],
-                get_key_cols_plot(self.df_master),
-            )
-        )
-        self.df_master, cols_key_plot_new = rename_cols_analyte(
-            self.df_master,
-            self.cols_key_plot["numeric_all"],
-            self.cols_key_plot["numeric_simple"],
-            self.cols_key_plot["numeric_clr"],
-        )
-        self.cols_key_plot["numeric_all"] = cols_key_plot_new[0]
-        self.cols_key_plot["numeric_simple"] = cols_key_plot_new[1]
-        self.cols_key_plot["numeric_clr"] = cols_key_plot_new[2]
-        self.cols_key_meta = dict(
-            zip(
-                [
-                    "loc_id",
-                    "date",
-                    "plotting_groups",
-                    "long_lat",
-                ],
-                get_key_cols_meta(self.df_master),
-            )
-        )
-        # for backwards compatibility, if plotting_groups is empty
-        # we will do a search on the old regex
-        bn_label_format_new = True
-        if len(self.cols_key_meta["plotting_groups"]) == 0:
-            print("Old 'LABELS' format detected for plot groups.")
-            cols_plot_groups = self.df_master.filter(
-                regex=r"^PLOTTING-GROUPS-DOMAIN-[0-9]{1,2}_LABELS$"
-            ).columns.to_list()
-            self.cols_key_meta["plotting_groups"] = cols_plot_groups
-            bn_label_format_new = False
-        else:
-            self.df_master, new_plotting_groups, self.cols_key_plot["meta"] = (
-                rename_cols_plot_groups(
-                    self.df_master,
-                    self.cols_key_meta["plotting_groups"],
-                    self.cols_key_plot["meta"],
-                )
-            )
-            self.cols_key_meta["plotting_groups"] = new_plotting_groups
+        mapped = build_mapped_dataset(df_raw, mapping)
+        self.validation = mapped.validation
 
-        self.df_master = set_key_col_date(
-            self.df_master,
-            self.cols_key_meta["date"],
-        )
+        self.df_master = None
+        self.cols_key_plot = None
+        self.cols_key_meta = None
+        self.df_coordinate = None
+        self.dict_marker_map = None
+        self.dict_generic_colors = None
+        self.loc_id_all = None
+        self.cols_numeric_all = None
 
-        self.df_master = self.df_master[
-            self.cols_key_plot["meta"] + self.cols_key_plot["numeric_all"]
-        ].copy()
+        if self.validation.has_errors:
+            return
+
+        self.df_master = mapped.df_master
+        self.cols_key_plot = mapped.cols_key_plot
+        self.cols_key_meta = mapped.cols_key_meta
 
         self.df_master = self.df_master.sort_values(
             by=[
@@ -102,65 +73,30 @@ class DataPreprocessor:
             self.cols_key_meta["loc_id"],
             self.cols_key_meta["long_lat"][0],
             self.cols_key_meta["long_lat"][1],
+            col_marker_size=self.cols_key_meta["map_marker_size"],
         )
 
-        self.dict_marker_map = df_col_group_to_dict(
-            self.df_master,
-            self.cols_key_meta["loc_id"],
-            "MARKERS-PLOT-DOMAIN",
-        )
+        self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
+
+        if self.cols_key_meta["marker_symbol"]:
+            self.dict_marker_map = df_col_group_to_dict(
+                self.df_master,
+                self.cols_key_meta["loc_id"],
+                self.cols_key_meta["marker_symbol"],
+            )
+        else:
+            # No marker-symbol role mapped - fill every location with a
+            # constant default so plotting.py's direct dict indexing
+            # (name_marker_map[loc_code]) never KeyErrors.
+            self.dict_marker_map = {loc: DEFAULT_MARKER_SYMBOL for loc in self.loc_id_all}
 
         self.dict_generic_colors = make_plotting_group_color_dicts(
             self.df_master,
             self.cols_key_meta["plotting_groups"],
-            new_format=bn_label_format_new,  # this is for backwards compatibility, will remove in future versions
+            group_colors=mapping.group_colors,
         )
 
-        self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
         self.cols_numeric_all = self.cols_key_plot["numeric_all"]
-
-    def check_lat_lon(self):
-        col_long = self.cols_key_meta["long_lat"][0]
-        col_lat = self.cols_key_meta["long_lat"][1]
-        bad_long = self.df_master[col_long].isna() | (
-            self.df_master[col_long].abs().gt(180)
-        )
-        bad_lat = self.df_master[col_lat].isna() | (
-            self.df_master[col_lat].abs().gt(90)
-        )
-        return (bad_long | bad_lat).any()
-
-    def check_numeric_no_nan(self):
-        return self.df_master[self.cols_key_plot["numeric_all"]].isna().any().any()
-
-    def check_clr_columns_positive(self):
-        return self.df_master[self.cols_key_plot["numeric_clr"]].le(0).any().any()
-
-    def check_color_columns(self):
-        color_cols = self.df_master.filter(
-            regex=r"COLORS"
-        ).columns  # for backwards compatibility just look for COLORS in the column names
-        hex_pattern = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-        def is_valid_hex(s):
-            return bool(hex_pattern.fullmatch(str(s)))
-
-        invalids = set()
-        for col in color_cols:
-            invalid_uniques = self.df_master[~self.df_master[col].map(is_valid_hex)][
-                col
-            ].unique()
-            if len(invalid_uniques) > 0:
-                invalids.update(invalid_uniques)
-        return invalids
-
-    def run_all_checks(self):
-        results = {}
-        results["lat_lon_check"] = self.check_lat_lon()
-        results["numeric_no_nan_check"] = self.check_numeric_no_nan()
-        results["clr_columns_positive_check"] = self.check_clr_columns_positive()
-        results["color_columns_check"] = self.check_color_columns()
-        return results
 
     def get_session_dict(self):
         return {
@@ -253,7 +189,12 @@ class DataPlotter:
 
     def df_between_dates(self, date_range):
         assert self.df_plot_pca.index.equals(self.df_plot_pmap.index)
-        _series_years = self.df_plot_pca[self.cols_key_meta["date"]].dt.year
+        col_date = self.cols_key_meta["date"]
+        if not col_date:
+            # No date column mapped - date-range filtering is disabled, keep
+            # all rows.
+            return
+        _series_years = self.df_plot_pca[col_date].dt.year
         _idx_between_dates = self.df_plot_pca[
             (_series_years >= date_range[0]) & (_series_years <= date_range[1])
         ].index
@@ -313,25 +254,3 @@ class SessionManager:
             ),
         }
         return dict_working_data
-
-    # @staticmethod
-    # def package_session_data(
-    #     json_master_data,  # json level
-    #     json_meta_data,
-    #     json_hash_data,
-    #     json_working_data,
-    #     feature_selection_dropdown,
-    #     loc_id_dropdown,
-    #     pmap_neighbors,
-    # ):
-    #     session = {
-    #         "master_data": json_master_data,
-    #         "meta_data": json_meta_data,
-    #         "hash_data": json_hash_data,
-    #         "working_data": json_working_data,
-    #         "feature_selection_dropdown": feature_selection_dropdown,
-    #         "loc_id_dropdown": loc_id_dropdown,
-    #         "pmap_neighbors": pmap_neighbors,
-    #     }
-
-    #     return json.dumps(session)

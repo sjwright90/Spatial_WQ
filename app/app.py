@@ -1,9 +1,10 @@
 # %%
+import base64
 import io
 import json
 
 import dash
-from dash.dependencies import Input, Output, State
+from dash.dependencies import ALL, Input, Output, State
 from dash import ctx
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
@@ -14,6 +15,7 @@ import pandas as pd
 
 from src.plotting import make_map, empty_fig
 from src.data_manager import DataPreprocessor, DataPlotter, SessionManager
+from src.data_model import ROLE_REGISTRY, ColumnRole, ColumnMapping
 
 from src.data_process import json_to_pandas, pandas_to_json
 
@@ -21,12 +23,12 @@ from src.data_process import json_to_pandas, pandas_to_json
 from src.dimension_reduction_functions import process_dimension_reduction
 from src.callbacks import callback_prevent_initial_output
 
-from src.session_manager import (
-    save_to_redis,
-    load_from_redis,
-    list_keys,
-    key_exists,
-)
+# from src.session_manager import (
+#     save_to_redis,
+#     load_from_redis,
+#     list_keys,
+#     key_exists,
+# )
 
 from pages.home import (
     create_page_map,
@@ -73,82 +75,166 @@ def toggle_sidebar(n, nclick):
     return sidebar_style, content_style, cur_nclick
 
 
-# IMPORT DATA FROM .CSV
-# @app.callback(
-#     Output("meta-data", "data"),  # still needed
-#     Output("session", "data"),
-#     Output("working-data", "data", allow_duplicate=True),  # need to clear output
-#     Input("upload-data", "contents"),
-#     prevent_initial_call=True,
-# )
-# def process_data(contents):
-#     if contents is None:
-#         return None, None, None  # No data to process
-#     content_type, content_string = contents.split(",")
-#     data_preprocessor = DataPreprocessor(content_string)
-#     session_dict = data_preprocessor.get_session_dict()
-#     return (
-#         json.dumps(session_dict["meta_data"]),
-#         json.dumps(session_dict),
-#         None,  # Clear working data on new upload
-#     )
+# UPLOAD STEP 1: stage the raw CSV, open the column-mapping modal
+_MAPPED_ROLE_SPECS = [spec for spec in ROLE_REGISTRY if spec.role != ColumnRole.GROUP_COLOR]
 
 
+@app.callback(
+    Output("raw-upload-store", "data"),
+    Output("mapping-modal", "is_open"),
+    Output({"type": "role-mapping", "role": ALL}, "options"),
+    Output({"type": "role-mapping", "role": ALL}, "value"),
+    Output("mapping-issues-container", "children", allow_duplicate=True),
+    Output("mapping-issues-container", "is_open", allow_duplicate=True),
+    Input("upload-data", "contents"),
+    prevent_initial_call=True,
+)
+def stage_raw_upload(contents):
+    if contents is None:
+        raise PreventUpdate
+    content_type, content_string = contents.split(",")
+    decoded = base64.b64decode(content_string)
+    columns = pd.read_csv(io.BytesIO(decoded), nrows=0).columns.to_list()
+    options = [{"label": col, "value": col} for col in columns]
+    n_roles = len(_MAPPED_ROLE_SPECS)
+    reset_values = [[] if spec.multi else None for spec in _MAPPED_ROLE_SPECS]
+    return (
+        json.dumps({"content_string": content_string, "columns": columns}),
+        True,  # open the mapping modal
+        [options] * n_roles,
+        reset_values,
+        [],
+        False,
+    )
+
+
+# Rebuild the per-plotting-group color dropdowns whenever the plotting-group
+# mapping changes, so users can optionally supply a predefined color column
+# per group without hand-authoring a fixed number of color dropdowns.
+@app.callback(
+    Output("mapping-group-color-container", "children"),
+    Input({"type": "role-mapping", "role": ColumnRole.PLOTTING_GROUP.value}, "value"),
+    State("raw-upload-store", "data"),
+    prevent_initial_call=True,
+)
+def update_group_color_dropdowns(plotting_groups, raw_upload_data):
+    if not plotting_groups or raw_upload_data is None:
+        return []
+    raw = json.loads(raw_upload_data)
+    options = [{"label": col, "value": col} for col in raw["columns"]]
+    return [
+        html.Div(
+            [
+                html.P(f"Color column for '{group_col}' (optional)"),
+                dcc.Dropdown(
+                    id={"type": "group-color-mapping", "group": group_col},
+                    options=options,
+                    value=None,
+                    multi=False,
+                    placeholder="Auto-generate colors",
+                ),
+            ],
+            style={"margin-bottom": "8px"},
+        )
+        for group_col in plotting_groups
+    ]
+
+
+def _validation_issues_to_list_items(issues):
+    return [
+        html.Li(f"{'❌' if issue.severity == 'error' else '⚠️'} [{issue.field}] {issue.message}")
+        for issue in issues
+    ]
+
+
+# UPLOAD STEP 2: user confirms their column mapping - build the session
 @app.callback(
     Output("meta-data", "data"),
     Output("session", "data"),
     Output("working-data", "data", allow_duplicate=True),
-    Output("global-alert-container", "children"),  # ← NEW OUTPUT
-    Input("upload-data", "contents"),
+    Output("global-alert-container", "children"),
+    Output("mapping-modal", "is_open", allow_duplicate=True),
+    Output("mapping-issues-container", "children", allow_duplicate=True),
+    Output("mapping-issues-container", "is_open", allow_duplicate=True),
+    Input("confirm-mapping-button", "n_clicks"),
+    State("raw-upload-store", "data"),
+    State({"type": "role-mapping", "role": ALL}, "value"),
+    State({"type": "role-mapping", "role": ALL}, "id"),
+    State({"type": "group-color-mapping", "group": ALL}, "value"),
+    State({"type": "group-color-mapping", "group": ALL}, "id"),
     prevent_initial_call=True,
 )
-def process_data(contents):
-    if contents is None:
+def confirm_mapping(
+    n_clicks,
+    raw_upload_data,
+    role_values,
+    role_ids,
+    group_color_values,
+    group_color_ids,
+):
+    if raw_upload_data is None:
         raise PreventUpdate
-    content_type, content_string = contents.split(",")
-    data_preprocessor = DataPreprocessor(content_string)
-    session_dict = data_preprocessor.get_session_dict()
 
-    alerts = []
-    results = data_preprocessor.run_all_checks()
-    if results["lat_lon_check"]:
-        alerts.append("❌ Some lat/lon values are out of bounds.")
-    if results["numeric_no_nan_check"]:
-        alerts.append("❌ Missing values found in numeric columns.")
-    if results["clr_columns_positive_check"]:
-        alerts.append("❌ CLR values must be real and > 0.")
-    if len(results["color_columns_check"]) > 0:
-        invalids_string = ", ".join(results["color_columns_check"])
-        alerts.append(
-            f"❌ Some color codes are not valid hex values. Must start with '#' only including 0-9 and letters a-f. Bad codes: {invalids_string}"
-        )
+    raw = json.loads(raw_upload_data)
+    role_value_map = {id_["role"]: value for id_, value in zip(role_ids, role_values)}
+    group_colors = {
+        id_["group"]: value
+        for id_, value in zip(group_color_ids, group_color_values)
+        if value
+    }
 
-    if alerts:
-        alert = dbc.Alert(
-            " ".join(alerts),
-            color="danger",
-            dismissable=True,
-            duration=10000,  # 10 seconds
-        )
+    mapping = ColumnMapping(
+        location_id=role_value_map.get(ColumnRole.LOCATION_ID.value),
+        latitude=role_value_map.get(ColumnRole.LATITUDE.value),
+        longitude=role_value_map.get(ColumnRole.LONGITUDE.value),
+        plotting_groups=role_value_map.get(ColumnRole.PLOTTING_GROUP.value) or [],
+        numeric_simple=role_value_map.get(ColumnRole.NUMERIC_SIMPLE.value) or [],
+        numeric_clr=role_value_map.get(ColumnRole.NUMERIC_CLR.value) or [],
+        date=role_value_map.get(ColumnRole.DATE.value) or None,
+        marker_symbol=role_value_map.get(ColumnRole.MARKER_SYMBOL.value) or None,
+        map_marker_size=role_value_map.get(ColumnRole.MAP_MARKER_SIZE.value) or None,
+        group_colors=group_colors,
+    )
+
+    data_preprocessor = DataPreprocessor(raw["content_string"], mapping)
+    issue_items = _validation_issues_to_list_items(data_preprocessor.validation.issues)
+
+    if data_preprocessor.validation.has_errors:
         return (
             None,
             None,
-            None,  # Clear working data on new upload
-            alert,  # Return the alert with all issues
+            None,
+            dash.no_update,
+            True,  # keep the modal open so the user can fix the mapping
+            issue_items,
+            True,
+        )
+
+    session_dict = data_preprocessor.get_session_dict()
+
+    if data_preprocessor.validation.warnings:
+        alert = dbc.Alert(
+            "✅ Data loaded with warnings - see mapping details.",
+            color="warning",
+            dismissable=True,
+            duration=10000,
         )
     else:
         alert = dbc.Alert(
             "✅ All data QA/QC checks passed successfully!",
             color="success",
             dismissable=True,
-            duration=5000,  # 5 seconds
+            duration=5000,
         )
 
     return (
         json.dumps(session_dict["meta_data"]),
         json.dumps(session_dict),
-        None,
+        None,  # clear working data on new upload
         alert,
+        False,  # close the modal
+        issue_items,  # warnings, if any, stay visible after closing
+        bool(issue_items),
     )
 
 
@@ -287,6 +373,9 @@ def update_date_range_slider(session):
         return 0, 0, {}, [0, 0]
     session = json.loads(session)
     col_date = session["meta_data"]["cols_key_meta"]["date"]
+    if not col_date:
+        # No date column mapped - date-range filtering is disabled.
+        return 0, 0, {}, [0, 0]
     df_master = json_to_pandas(session, "df_master", col_date)
     date_min = int(df_master[col_date].dt.year.min())
     date_max = int(df_master[col_date].dt.year.max())
@@ -519,7 +608,7 @@ def plot_data(
 
 
 # TURN OFF FOR DEPLOYMENT WITH GUNICORN
-# port = 8050
-# if __name__ == "__main__":
-#     # app.run_server(debug=False, port=port)
-#     app.run_server(debug=True, port=port)
+port = 8050
+if __name__ == "__main__":
+    # app.run_server(debug=False, port=port)
+    app.run(debug=True, port=port)

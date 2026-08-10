@@ -2,25 +2,35 @@
 #
 # Functions
 # ---------
-# get_key_cols_meta
-# rename_cols_plot_groups
-# get_key_cols_plot
-# rename_cols_analyte
+# df_col_group_to_dict
+# make_color_dict
+# find_make_color_dict
+# make_plotting_group_color_dicts
 # extract_coordinate_dataframe
-# extract_color_dict
-# extract_marker_dict
+# subset_df_locIds
+# subset_df_numericFeatures
+# pandas_to_json
+# json_to_pandas
 # pc_scaler
 # make_df_for_biplot
+#
+# NOTE: column classification is no longer done here via regex/prefix
+# conventions (LOCATION-ID_, DATETIME, LABELS_*, NUMERIC-ANALYTE_,
+# CLR-ANALYTE_, etc.) - see data_model.py/data_mapping.py for the
+# declarative-mapping replacement. Date coercion also now lives in
+# data_mapping.py (per-row errors="coerce" + structured warnings, replacing
+# the old whole-column datetime.now() fallback that used to live here).
 from typing import List, Tuple
 from pandas import DataFrame, read_json, to_datetime
 import io
-from datetime import datetime
 
 # import 'alphabet' from plotly
 import plotly.colors as pc
 
 DISCRETE_COLOR_LIST = pc.qualitative.Alphabet
 COLOR_BREWER_1 = pc.qualitative.Set1
+
+DEFAULT_MAP_MARKER_SIZE = 10
 
 
 def df_col_group_to_dict(df, col_key, col_value):
@@ -44,146 +54,6 @@ def df_col_group_to_dict(df, col_key, col_value):
         Dictionary with the keys from col_key and the values from col_value.
     """
     return df.groupby(col_key)[col_value].first().to_dict()
-
-
-def get_key_cols_meta(df):
-    """
-    Get the key columns for the metadata.
-
-    Parameters
-    ---------
-    df : pandas DataFrame
-        DataFrame to get the key columns from.
-
-    Returns
-    -------
-    tuple
-        Tuple of the key columns for the metadata.
-        The tuple contains the following elements:
-        - col_loc_id: str, name of the location id column
-        - col_date: str, name of the date column
-        - cols_plot_groups: list, list of the plotting groups columns
-        - col_long_lat: list, list of the longitude and latitude columns
-    """
-    col_loc_id = df.filter(regex=r"^LOCATION-ID_").columns.to_list()[0]
-    col_date = df.filter(regex=r"^DATETIME$").columns.to_list()
-    cols_plot_groups = df.filter(regex=r"^LABELS_[0-9A-Za-z\s]*$").columns.to_list()
-    if len(col_date) == 0:
-        col_date = None
-    else:
-        col_date = col_date[0]
-    col_long_lat = ["LONGITUDE", "LATITUDE"]
-    return (
-        col_loc_id,
-        col_date,
-        cols_plot_groups,
-        col_long_lat,
-    )
-
-
-# TODO: DEVELOP THIS FUNCTION TO REPLACE THE TWO RENAME FUNCTIONS BELOW
-# def rename_columns_by_substring_split(
-#     df, columns_to_rename, split_token, return_updated_lists=None
-# ):
-#     """
-#     Rename columns by splitting on a token and keeping the suffix.
-#     Also returns updated versions of specified lists of columns with new names.
-
-#     Parameters
-#     ----------
-#     df : pandas.DataFrame
-#         DataFrame with original column names.
-
-#     columns_to_rename : list of str
-#         Columns to rename using the split_token rule.
-
-#     split_token : str
-#         Substring to split on (e.g., 'LABELS_' or '-ANALYTE_').
-
-#     return_updated_lists : list of list of str, optional
-#         Lists of column names (subsets of columns_to_rename) to return with updated names.
-
-#     Returns
-#     -------
-#     renamed_df : pandas.DataFrame
-#         DataFrame with renamed columns.
-
-#     new_column_names : list of str
-#         New column names resulting from the renaming.
-
-#     updated_lists : list of list of str, optional
-#         Updated versions of input column lists (if provided).
-#     """
-#     rename_dict = {col: col.split(split_token)[-1] for col in columns_to_rename}
-#     renamed_df = df.rename(columns=rename_dict)
-#     new_column_names = list(rename_dict.values())
-
-#     updated_lists = None
-#     if return_updated_lists is not None:
-#         updated_lists = []
-#         for lst in return_updated_lists:
-#             updated = [rename_dict[col] for col in lst if col in rename_dict]
-#             updated_lists.append(updated)
-
-#     return (
-#         (renamed_df, new_column_names, updated_lists)
-#         if updated_lists
-#         else (renamed_df, new_column_names)
-#     )
-
-
-def rename_cols_plot_groups(df, cols_plot_groups, cols_key_plot_meta):
-    """
-    Rename the plotting groups columns to a more readable format.
-
-    Parameters
-    ---------
-    df : pandas DataFrame
-        DataFrame to rename the plotting groups columns in.
-
-    cols_plot_groups : list
-        List of the plotting groups columns to rename.
-
-    Returns
-    -------
-    pandas DataFrame
-        DataFrame with the plotting groups columns renamed.
-    """
-    _dict_rename = {col: col.split("LABELS_")[-1] for col in cols_plot_groups}
-    cols_key_plot_meta = [col.replace("LABELS_", "") for col in cols_key_plot_meta]
-    return (
-        df.rename(columns=_dict_rename),
-        list(_dict_rename.values()),
-        cols_key_plot_meta,
-    )
-
-
-def rename_cols_analyte(df, cols_numeric_all, cols_numeric_simple, cols_numeric_clr):
-    """
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        The input DataFrame whose columns need to be renamed.
-    cols_numeric_all : list of str
-        A list of column names to be renamed and updated.
-    cols_numeric_simple : list of str
-        A subset of `cols_numeric_all` to be renamed and updated.
-    cols_numeric_clr : list of str
-        Another subset of `cols_numeric_all` to be renamed and updated.
-    Returns
-    -------
-    tuple
-        A tuple containing:
-    """
-    dict_rename = {col: col.split("-ANALYTE_")[-1] for col in cols_numeric_all}
-    cols_numeric_all = [dict_rename[col] for col in cols_numeric_all]
-    cols_numeric_simple = [dict_rename[col] for col in cols_numeric_simple]
-    cols_numeric_clr = [dict_rename[col] for col in cols_numeric_clr]
-    return df.rename(columns=dict_rename), (
-        cols_numeric_all,
-        cols_numeric_simple,
-        cols_numeric_clr,
-    )
 
 
 def make_color_dict(df, col_plot_group):
@@ -213,10 +83,10 @@ def make_color_dict(df, col_plot_group):
     return _dict_color
 
 
-def find_make_color_dict(df, col_plot_group, new_format=True):
+def find_make_color_dict(df, col_plot_group, col_predefined_color=None):
     """
-    Find the color dictionary for the plotting groups. If it does not exist,
-    make a new one.
+    Find the color dictionary for the plotting groups. If none is available
+    (no predefined color column was mapped for this group), auto-generate one.
 
     Parameters
     ---------
@@ -226,38 +96,24 @@ def find_make_color_dict(df, col_plot_group, new_format=True):
     col_plot_group : str
         Column name to use for the plotting groups.
 
-    new_format : bool, default True
-        Whether to use the new format for the plotting groups.
-        If True, it will look for columns starting with "COLORS_".
-        If False, it will look for columns ending with "_COLORS".
-        For backwards compatibility only, will be removed in the future.
-
+    col_predefined_color : str, optional
+        Name of a column in `df` holding a predefined hex color per value of
+        `col_plot_group` (user-mapped via ColumnRole.GROUP_COLOR). If None or
+        not present in `df`, an auto-generated palette is used instead.
 
     Returns
     -------
     dict
         Dictionary with the plotting groups as keys and the colors as values.
     """
-
-    if new_format:
-        _col_prefix = col_plot_group
-        _col_predefined_color = df.filter(
-            regex=f"^COLORS_{_col_prefix}$"
-        ).columns.to_list()
+    if col_predefined_color and col_predefined_color in df.columns:
+        _dict_color = df_col_group_to_dict(df, col_plot_group, col_predefined_color)
     else:
-        _col_prefix = col_plot_group.split("_LABELS")[0]
-        _col_predefined_color = df.filter(
-            regex=f"^{_col_prefix}_COLORS$"
-        ).columns.to_list()
-
-    if len(_col_predefined_color) == 0:
         _dict_color = make_color_dict(df, col_plot_group)
-    else:
-        _dict_color = df_col_group_to_dict(df, col_plot_group, _col_predefined_color[0])
     return _dict_color
 
 
-def make_plotting_group_color_dicts(df, cols_plot_groups, new_format=True):
+def make_plotting_group_color_dicts(df, cols_plot_groups, group_colors=None):
     """
     Create a dictionary of color dictionaries for the plotting groups and combine them.
 
@@ -269,79 +125,31 @@ def make_plotting_group_color_dicts(df, cols_plot_groups, new_format=True):
     cols_plot_groups : list
         List of the plotting groups columns.
 
-    new_format : bool, default True
-        Whether to use the new format for the plotting groups.
-        If True, it will look for columns starting with "COLORS_".
-        If False, it will look for columns ending with "_COLORS".
-        For backwards compatibility only, will be removed in the future.
+    group_colors : dict, optional
+        Mapping of plotting-group column name -> predefined color column name
+        (from ColumnMapping.group_colors). Groups without an entry fall back
+        to an auto-generated palette.
 
     Returns
     -------
     dict
         Dictionary with the plotting groups as keys and the colors as values.
     """
+    group_colors = group_colors or {}
     _dict_col_colors = {}
     for col in cols_plot_groups:
-        _dict_col_colors[col] = find_make_color_dict(df, col, new_format=new_format)
+        _dict_col_colors[col] = find_make_color_dict(df, col, group_colors.get(col))
     return _dict_col_colors
 
 
-def set_key_col_date(df, col_datetime):
-    """
-    Set the date column to datetime format. If it fails, set to current date.
-    If no date column is provided, print a message.
-
-    Parameters
-    ---------
-    df : pandas DataFrame
-        DataFrame to set the date column for.
-    col_datetime : str
-        Name of the date column to set.
-
-    Returns
-    -------
-    df : pandas DataFrame
-        DataFrame with the date column set to datetime format.
-    """
-    if col_datetime:
-        try:
-            df[col_datetime] = to_datetime(df[col_datetime])
-        except ValueError as e:
-            df[col_datetime] = datetime.now()
-            print("Could not parse date column, setting to current date")
-            print(f"Error: {e}")
-            pass
-    else:
-        print("No date column provided")
-    return df
-
-
-def get_key_cols_plot(df):
-    """
-    Extracts and categorizes columns from a DataFrame based on specific naming patterns.
-
-    Parameters
-    ----------
-        df (pandas.DataFrame): The input DataFrame containing the data.
-
-    Returns
-    -------
-        tuple: A tuple containing four lists:
-            - cols_meta (list): Columns that do not match the specified patterns.
-            - cols_numeric_all (list): Combined list of columns matching the "CLR-ANALYTE_"
-              and "NUMERIC-ANALYTE_" patterns.
-            - cols_simple (list): Columns matching the "NUMERIC-ANALYTE_" pattern.
-            - cols_clr (list): Columns matching the "CLR-ANALYTE_" pattern.
-    """
-    cols_clr = df.filter(regex=r"^CLR-ANALYTE_").columns.to_list()
-    cols_simple = df.filter(regex=r"^NUMERIC-ANALYTE_").columns.to_list()
-    cols_numeric_all = cols_simple + cols_clr
-    cols_meta = df.columns.difference(cols_numeric_all).to_list()
-    return cols_meta, cols_numeric_all, cols_simple, cols_clr
-
-
 def extract_coordinate_dataframe(
-    df, list_plot_groups, col_loc_id, col_longitude, col_latitude
+    df,
+    list_plot_groups,
+    col_loc_id,
+    col_longitude,
+    col_latitude,
+    col_marker_size=None,
+    default_marker_size=DEFAULT_MAP_MARKER_SIZE,
 ):
     """
     Extracts a DataFrame containing unique location coordinates and associated metadata.
@@ -349,7 +157,9 @@ def extract_coordinate_dataframe(
     This function groups the input DataFrame by a specified location identifier column
     and extracts the first occurrence of specified columns for each unique location.
     The resulting DataFrame includes the specified plot group columns, location ID,
-    longitude, latitude, and a "MAP-MARKER-SIZE" column.
+    longitude, latitude, and a "MAP-MARKER-SIZE" column (renamed from
+    `col_marker_size` if mapped, else synthesized as a constant - `plotting.make_map`
+    hardcodes the literal column name "MAP-MARKER-SIZE" by default).
 
     Parameters
     ----------
@@ -358,19 +168,29 @@ def extract_coordinate_dataframe(
         col_loc_id (str): The name of the column representing unique location identifiers.
         col_longitude (str): The name of the column containing longitude values.
         col_latitude (str): The name of the column containing latitude values.
+        col_marker_size (str, optional): Name of the column holding per-row marker
+            size values. If None, a constant `default_marker_size` column is used.
+        default_marker_size (numeric): Constant marker size used when
+            `col_marker_size` is not provided.
 
     Returns
     -------
         pd.DataFrame: A new DataFrame containing the specified columns for each unique
         location, with one row per unique location ID.
     """
-    _cols_grab = list_plot_groups + [
-        col_loc_id,
-        col_longitude,
-        col_latitude,
-        "MAP-MARKER-SIZE",
-    ]
-    return df.groupby(col_loc_id)[_cols_grab].first().reset_index(drop=True).copy()
+    _cols_grab = list_plot_groups + [col_loc_id, col_longitude, col_latitude]
+    if col_marker_size:
+        _cols_grab = _cols_grab + [col_marker_size]
+
+    result = df.groupby(col_loc_id)[_cols_grab].first().reset_index(drop=True).copy()
+
+    if col_marker_size:
+        if col_marker_size != "MAP-MARKER-SIZE":
+            result = result.rename(columns={col_marker_size: "MAP-MARKER-SIZE"})
+    else:
+        result["MAP-MARKER-SIZE"] = default_marker_size
+
+    return result
 
 
 def subset_df_locIds(df, col_loc_id, loc_ids_subset):
