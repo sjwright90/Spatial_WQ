@@ -146,6 +146,59 @@ class TestBuildMappedDatasetCoercion(unittest.TestCase):
         self.assertTrue(any(w.field == "group_color" for w in result.validation.warnings))
 
 
+class TestBuildMappedDatasetEntityId(unittest.TestCase):
+    def test_entity_id_combines_location_and_date(self):
+        result = build_mapped_dataset(make_raw_df(), make_full_mapping())
+        self.assertEqual(result.cols_key_meta["entity_id"], "ENTITY_ID")
+        self.assertEqual(
+            result.df_master["ENTITY_ID"].tolist(),
+            ["1A_2023-01-01", "2B_2023-01-02", "3C_2023-01-03"],
+        )
+
+    def test_entity_id_falls_back_to_location_id_when_no_date_mapped(self):
+        mapping = ColumnMapping(
+            location_id="Site_Name",
+            latitude="lat_dd",
+            longitude="lon_dd",
+            plotting_groups=["Group"],
+            numeric_simple=["Copper"],
+        )
+        result = build_mapped_dataset(make_raw_df(), mapping)
+        self.assertEqual(
+            result.df_master["ENTITY_ID"].tolist(), ["1A", "2B", "3C"]
+        )
+
+    def test_entity_id_falls_back_to_location_id_when_date_fully_unusable(self):
+        df = make_raw_df()
+        df["Sample_Date"] = ["not-a-date", "also-bad", "still-bad"]
+        result = build_mapped_dataset(df, make_full_mapping())
+        self.assertIsNone(result.cols_key_meta["date"])
+        self.assertEqual(
+            result.df_master["ENTITY_ID"].tolist(), ["1A", "2B", "3C"]
+        )
+
+    def test_entity_id_falls_back_per_row_on_unparseable_date(self):
+        df = make_raw_df()
+        df.loc[0, "Sample_Date"] = "not-a-date"
+        result = build_mapped_dataset(df, make_full_mapping())
+        self.assertEqual(
+            result.df_master["ENTITY_ID"].tolist(),
+            ["1A", "2B_2023-01-02", "3C_2023-01-03"],
+        )
+
+    def test_duplicate_entity_id_warns_non_blocking(self):
+        df = make_raw_df()
+        df.loc[1, "Site_Name"] = "1A"
+        df.loc[1, "Sample_Date"] = "2023-01-01"
+        result = build_mapped_dataset(df, make_full_mapping())
+        self.assertFalse(result.validation.has_errors)
+        self.assertTrue(any(w.field == "entity_id" for w in result.validation.warnings))
+
+    def test_no_duplicate_entity_id_no_warning(self):
+        result = build_mapped_dataset(make_raw_df(), make_full_mapping())
+        self.assertFalse(any(w.field == "entity_id" for w in result.validation.warnings))
+
+
 class TestBuildMappedDatasetOptionalRolesAbsent(unittest.TestCase):
     def test_all_optional_roles_absent_still_builds(self):
         mapping = ColumnMapping(

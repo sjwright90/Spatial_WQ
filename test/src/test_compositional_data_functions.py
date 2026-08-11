@@ -36,16 +36,22 @@ class TestCompositionalDataFunctions(unittest.TestCase):
         with self.assertRaises(ValueError):
             clr_transform(data_with_nan)
 
+    def test_clr_transform_does_not_mutate_input_on_raise(self):
+        # Regression test: clr_transform used to do `X[X == 0.0] = np.nan`
+        # before validating, so a caught ValueError still left the caller's
+        # array silently corrupted. It must now be untouched.
+        data_with_zeros = np.array([[1.0, 0.0, 3.0], [4.0, 5.0, 6.0]])
+        original = data_with_zeros.copy()
+        with self.assertRaises(ValueError):
+            clr_transform(data_with_zeros)
+        np.testing.assert_array_equal(data_with_zeros, original)
+
     def test_clr_transform_scale(self):
         # Test with valid data
-        df = pd.DataFrame(
-            {"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0], "C": [7.0, 8.0, 9.0]}
-        )
+        df = pd.DataFrame({"A": [1.0, 2.0, 3.0], "B": [4.0, 5.0, 6.0], "C": [7.0, 8.0, 9.0]})
         cols_numeric_all = ["A", "B", "C"]
         cols_numeric_clr = ["A", "B"]
-        transformed_df = clr_transform_scale(
-            df.copy(), cols_numeric_all, cols_numeric_clr
-        )
+        transformed_df = clr_transform_scale(df.copy(), cols_numeric_all, cols_numeric_clr)
 
         # Ensure the transformed DataFrame has the same shape
         self.assertEqual(transformed_df.shape, df.shape)

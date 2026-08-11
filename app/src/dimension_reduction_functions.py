@@ -2,7 +2,7 @@ from pandas import DataFrame
 from sklearn.decomposition import PCA
 import pacmap
 
-from typing import Type, Tuple
+from typing import Tuple
 
 from .data_process import (
     make_df_for_biplot,
@@ -10,6 +10,9 @@ from .data_process import (
     subset_df_numericFeatures,
 )
 from .compositional_data_functions import clr_transform_scale
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
@@ -63,9 +66,7 @@ def run_pmap(df: DataFrame, cat_cols: list, analytes: list, n_neighbors: int = 1
     df_pmap
         Dataframe for plotting biplot.
     """
-    pmap_trns = pacmap.PaCMAP(n_neighbors=n_neighbors, random_state=42).fit_transform(
-        df[analytes]
-    )
+    pmap_trns = pacmap.PaCMAP(n_neighbors=n_neighbors, random_state=42).fit_transform(df[analytes])
     df_pmap = make_df_for_biplot(pmap_trns, df, col_list=cat_cols, prefix="PMAP")
     return df_pmap
 
@@ -153,7 +154,44 @@ def process_dimension_reduction(
     feature_selection,
     loc_id_selection,
     n_neighbors,
-) -> Type[Tuple[DataFrame, DataFrame, DataFrame]]:
+) -> Tuple[Tuple[DataFrame, DataFrame, list], DataFrame]:
+    """
+    Subset `df` to the selected locations/analytes, CLR+scale it, and run
+    both PCA and PaCMAP on the result.
+
+    Parameters
+    ----------
+    df : pandas DataFrame
+        Full master dataframe to subset and transform.
+    col_loc_id : str
+        Location-ID column name.
+    cols_meta : list
+        Non-numeric (metadata/plotting-group) columns carried through to the
+        biplot dataframes.
+    cols_numeric_simple, cols_numeric_clr : list
+        Analyte columns to standard-scale only, vs. CLR-transform then scale.
+    feature_selection : list
+        Subset of analyte columns (from cols_numeric_simple/cols_numeric_clr)
+        the user selected to run dimension reduction on.
+    loc_id_selection : list
+        Subset of location IDs to include.
+    n_neighbors : int
+        PaCMAP neighbor count.
+
+    Returns
+    -------
+    (df_plot_pca, ldg_df, expl_var), df_plot_pmap
+
+    Raises
+    ------
+    ValueError
+        If `feature_selection` is empty - fitting PCA/PaCMAP on zero columns
+        fails deep inside sklearn/pacmap with an unhelpful error otherwise.
+    """
+    if not feature_selection:
+        logger.error("process_dimension_reduction called with empty feature_selection")
+        raise ValueError("No analytes selected for dimension reduction")
+
     df = subset_df_locIds(df, col_loc_id, loc_id_selection)
     df, cols_numeric_all, cols_numeric_clr = subset_df_numericFeatures(
         df, cols_numeric_simple, cols_numeric_clr, feature_selection

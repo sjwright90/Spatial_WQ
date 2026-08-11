@@ -6,3 +6,5 @@ LICENSE
 .vscode
 server.py
 test/
+.claude/
+docs/agent-context/

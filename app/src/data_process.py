@@ -20,7 +20,7 @@
 # declarative-mapping replacement. Date coercion also now lives in
 # data_mapping.py (per-row errors="coerce" + structured warnings, replacing
 # the old whole-column datetime.now() fallback that used to live here).
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from pandas import DataFrame, read_json, to_datetime
 import io
 
@@ -28,12 +28,11 @@ import io
 import plotly.colors as pc
 
 DISCRETE_COLOR_LIST = pc.qualitative.Alphabet
-COLOR_BREWER_1 = pc.qualitative.Set1
 
 DEFAULT_MAP_MARKER_SIZE = 10
 
 
-def df_col_group_to_dict(df, col_key, col_value):
+def df_col_group_to_dict(df: DataFrame, col_key: str, col_value: str) -> Dict[Any, Any]:
     """
     Convert a DataFrame column to a dictionary.
 
@@ -56,7 +55,7 @@ def df_col_group_to_dict(df, col_key, col_value):
     return df.groupby(col_key)[col_value].first().to_dict()
 
 
-def make_color_dict(df, col_plot_group):
+def make_color_dict(df: DataFrame, col_plot_group: str) -> Dict[Any, str]:
     """
     Create a color dictionary for the plotting groups.
 
@@ -74,16 +73,14 @@ def make_color_dict(df, col_plot_group):
         Dictionary with the plotting groups as keys and the colors as values.
     """
     _n_unique_colors = df[col_plot_group].nunique()
-    _unique_color_list = DISCRETE_COLOR_LIST * (
-        _n_unique_colors // len(DISCRETE_COLOR_LIST) + 1
-    )
-    _dict_color = {
-        k: v for k, v in zip(sorted(df[col_plot_group].unique()), _unique_color_list)
-    }
+    _unique_color_list = DISCRETE_COLOR_LIST * (_n_unique_colors // len(DISCRETE_COLOR_LIST) + 1)
+    _dict_color = {k: v for k, v in zip(sorted(df[col_plot_group].unique()), _unique_color_list)}
     return _dict_color
 
 
-def find_make_color_dict(df, col_plot_group, col_predefined_color=None):
+def find_make_color_dict(
+    df: DataFrame, col_plot_group: str, col_predefined_color: Optional[str] = None
+) -> Dict[Any, str]:
     """
     Find the color dictionary for the plotting groups. If none is available
     (no predefined color column was mapped for this group), auto-generate one.
@@ -113,7 +110,9 @@ def find_make_color_dict(df, col_plot_group, col_predefined_color=None):
     return _dict_color
 
 
-def make_plotting_group_color_dicts(df, cols_plot_groups, group_colors=None):
+def make_plotting_group_color_dicts(
+    df: DataFrame, cols_plot_groups: List[str], group_colors: Optional[Dict[str, str]] = None
+) -> Dict[str, Dict[Any, str]]:
     """
     Create a dictionary of color dictionaries for the plotting groups and combine them.
 
@@ -143,14 +142,14 @@ def make_plotting_group_color_dicts(df, cols_plot_groups, group_colors=None):
 
 
 def extract_coordinate_dataframe(
-    df,
-    list_plot_groups,
-    col_loc_id,
-    col_longitude,
-    col_latitude,
-    col_marker_size=None,
-    default_marker_size=DEFAULT_MAP_MARKER_SIZE,
-):
+    df: DataFrame,
+    list_plot_groups: List[str],
+    col_loc_id: str,
+    col_longitude: str,
+    col_latitude: str,
+    col_marker_size: Optional[str] = None,
+    default_marker_size: float = DEFAULT_MAP_MARKER_SIZE,
+) -> DataFrame:
     """
     Extracts a DataFrame containing unique location coordinates and associated metadata.
 
@@ -193,7 +192,7 @@ def extract_coordinate_dataframe(
     return result
 
 
-def subset_df_locIds(df, col_loc_id, loc_ids_subset):
+def subset_df_locIds(df: DataFrame, col_loc_id: str, loc_ids_subset) -> DataFrame:
     """
     Subset a DataFrame based on a list of location IDs.
 
@@ -216,20 +215,39 @@ def subset_df_locIds(df, col_loc_id, loc_ids_subset):
 
 
 def subset_df_numericFeatures(
-    df, cols_numeric_simple, cols_numeric_clr, cols_numeric_subset
+    df: DataFrame,
+    cols_numeric_simple: List[str],
+    cols_numeric_clr: List[str],
+    cols_numeric_subset: List[str],
 ) -> Tuple[DataFrame, List[str], List[str]]:
+    """
+    Restrict `df`'s numeric analyte columns to `cols_numeric_subset`, keeping
+    all non-numeric (metadata) columns and the original column order.
+
+    Parameters
+    ----------
+    df : pandas DataFrame
+        Dataframe to subset.
+    cols_numeric_simple, cols_numeric_clr : list
+        The full set of simple/CLR analyte columns before subsetting.
+    cols_numeric_subset : list
+        The analyte columns the user actually selected.
+
+    Returns
+    -------
+    df : pandas DataFrame
+        `df` restricted to metadata columns + the selected analytes.
+    cols_numeric_all_subset : list
+        `cols_numeric_simple`/`cols_numeric_clr` intersected with `cols_numeric_subset`.
+    cols_numeric_clr_subset : list
+        Just the CLR subset of `cols_numeric_all_subset`.
+    """
     _cols_original = df.columns.to_list()
     _cols_meta = df.columns.difference(cols_numeric_simple + cols_numeric_clr).to_list()
-    _cols_numeric_simple_subset = [
-        col for col in cols_numeric_simple if col in cols_numeric_subset
-    ]
-    _cols_numeric_clr_subset = [
-        col for col in cols_numeric_clr if col in cols_numeric_subset
-    ]
+    _cols_numeric_simple_subset = [col for col in cols_numeric_simple if col in cols_numeric_subset]
+    _cols_numeric_clr_subset = [col for col in cols_numeric_clr if col in cols_numeric_subset]
     _cols_numeric_all_subset = _cols_numeric_simple_subset + _cols_numeric_clr_subset
-    df = (
-        df[_cols_meta + _cols_numeric_all_subset].copy().reindex(columns=_cols_original)
-    )
+    df = df[_cols_meta + _cols_numeric_all_subset].copy().reindex(columns=_cols_original)
     return (
         df,
         _cols_numeric_all_subset,
@@ -237,14 +255,49 @@ def subset_df_numericFeatures(
     )
 
 
-def pandas_to_json(df: DataFrame, col_datetime: str = None) -> str:
+def pandas_to_json(df: DataFrame, col_datetime: Optional[str] = None) -> str:
+    """
+    Serialize `df` to a JSON string (orient="split"), formatting `col_datetime`
+    (if given) as an ISO date string first so it round-trips cleanly.
+
+    Parameters
+    ----------
+    df : pandas DataFrame
+        Dataframe to serialize.
+    col_datetime : str, optional
+        Name of a datetime column to format as "%Y-%m-%d" before serializing.
+
+    Returns
+    -------
+    str
+        JSON string, ready to store in a dcc.Store/Redis session blob.
+    """
     df = df.copy()
     if col_datetime:
         df[col_datetime] = df[col_datetime].dt.strftime("%Y-%m-%d")
     return df.to_json(orient="split", date_format="iso", double_precision=15)
 
 
-def json_to_pandas(json_dict, key, col_datetime=None):
+def json_to_pandas(
+    json_dict: Dict[str, Any], key: str, col_datetime: Optional[str] = None
+) -> DataFrame:
+    """
+    Deserialize `json_dict[key]` (as produced by pandas_to_json) back into a
+    DataFrame, re-parsing `col_datetime` (if given) back into datetimes.
+
+    Parameters
+    ----------
+    json_dict : dict
+        A session/store dict whose `key` entry is a pandas_to_json JSON string.
+    key : str
+        Which entry of `json_dict` to deserialize.
+    col_datetime : str, optional
+        Name of a column to parse back into datetime dtype.
+
+    Returns
+    -------
+    pandas DataFrame
+    """
     df = read_json(io.StringIO(json_dict[key]), orient="split", precise_float=True)
     if col_datetime:
         df[col_datetime] = to_datetime(df[col_datetime])
@@ -271,9 +324,7 @@ def pc_scaler(series):
     return series / (series.max() - series.min())
 
 
-def make_df_for_biplot(
-    trnf_data, full_df, col_list=None, num_comp=2, scale=True, prefix="PC"
-):
+def make_df_for_biplot(trnf_data, full_df, col_list=None, num_comp=2, scale=True, prefix="PC"):
     """
     Extract PCs and relevant columns for bi-plots
 
@@ -308,9 +359,9 @@ def make_df_for_biplot(
         col_list = full_df.columns.to_list()
 
     colnames = [f"{prefix}{x+1}" for x in range(num_comp)]
-    temp = DataFrame(
-        trnf_data[:, :num_comp], columns=colnames, index=full_df.index
-    ).join(full_df[col_list])
+    temp = DataFrame(trnf_data[:, :num_comp], columns=colnames, index=full_df.index).join(
+        full_df[col_list]
+    )
     temp.columns = colnames + col_list
 
     if scale:

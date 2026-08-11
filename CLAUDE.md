@@ -48,10 +48,17 @@ One flat Flask+Dash app, no blueprints/router:
 - `app/src/plotting.py` — all Plotly figure builders (`make_map`, `make_fig_pca`,
   `make_fig_pmap`). Untouched by the mapping refactor — see "Explicit column mapping"
   below for why.
-- `app/src/session_manager.py` — Redis read/write helpers (currently unreachable, see
-  GOTCHAS).
-- `app/src/cache_initialize.py` — Flask-Caching key/hash helpers (currently unused, see
-  GOTCHAS).
+- `app/src/session_manager.py` — Redis read/write helpers. Wired up and working from
+  `app/app.py` (fixed during the hardening pass — see GOTCHAS for history).
+- `app/src/cache_initialize.py` — Flask-Caching key/hash helpers. `generate_df_hash_version`
+  is actively used by `DataPreprocessor`; only `make_custom_cache_key_dimensionReduction`
+  (the actual caching wiring) is unused — see GOTCHAS.
+- `app/src/logging_config.py` — `get_logger(__name__)`/`configure_logging()`, the app's
+  `logging` setup (see Conventions below).
+- `app/src/error_handling.py` — `log_and_prevent_update`/`log_and_surface_error`
+  decorators used on `app.py` callbacks for consistent error logging.
+- `app/src/store_utils.py` — `load_store`/`dump_store`, thin json.loads/dumps wrappers
+  for dcc.Store string payloads.
 
 **State model**: no server-side session — all cross-callback state round-trips through
 `dcc.Store` as JSON strings via `pandas_to_json`/`json_to_pandas`. Every callback that
@@ -97,27 +104,45 @@ No CI config in the repo — tests run locally/manually only.
 
 ## Conventions
 
-- Use `print()` for status/debug — the codebase does not use `logging`, be consistent
-  with existing files rather than introducing it ad hoc mid-file.
-- Commented-out dead code is generally left in place elsewhere (e.g. `app/src/data_manager.py`'s
-  legacy `SessionManager.package_session_data`) rather than deleted — but the old
-  regex-based column-classification code was fully **deleted**, not commented out, when
-  the mapping refactor replaced it (explicit no-backward-compat decision). Don't treat
-  "leave dead code in place" as covering removals like that one.
-- Docstrings (numpy-style) are present in `data_process.py`, `data_mapping.py`,
-  `dimension_reduction_functions.py`, `compositional_data_functions.py`; largely absent
-  in `app.py`/`data_manager.py`. Match the target file's existing density.
+- **Use `logging`, never `print()`, for status/debug/error output.** Call
+  `get_logger(__name__)` from `app/src/logging_config.py` at module scope, then
+  `logger.info(...)`/`logger.warning(...)`/`logger.exception(...)` as appropriate. Each
+  process entrypoint (`app/app.py`, `server.py`) calls `configure_logging()` once at
+  import time — don't call it from library modules. This supersedes an earlier
+  print()-only convention (replaced during the hardening pass that also fixed Redis and
+  added type hints/docstrings across `app.py`/`data_manager.py`/`plotting.py`); if you
+  find a stray `print()` in older code, it's a leftover, not the standard to follow.
+- `app.py` callbacks use the `log_and_prevent_update`/`log_and_surface_error` decorators
+  (`app/src/error_handling.py`) for consistent exception logging instead of hand-rolled
+  try/except — reach for those instead of writing a new bespoke try/except block. Load
+  dcc.Store JSON payloads via `store_utils.load_store` rather than a bare `json.loads(...)`.
+- Commented-out dead code is generally left in place elsewhere (e.g. the old regex-based
+  column-classification code deleted, not commented out, when the mapping refactor
+  replaced it — see codebase-map.md; that was an explicit no-backward-compat decision,
+  not the norm) — don't delete commented-out code casually without checking whether it's
+  there deliberately.
+- Docstrings (numpy-style, at least a one-liner) are now present across all of
+  `app/src/` and `app/app.py`'s callbacks, not just the four files that originally had
+  them (`data_process.py`, `data_mapping.py`, `dimension_reduction_functions.py`,
+  `compositional_data_functions.py`). Match the target file's existing density when
+  adding new functions.
+- Type hints on function signatures are now the norm throughout `app/src/` and
+  `app/app.py`'s callbacks — add them to new functions rather than leaving them untyped.
 - Adding/removing a column-mapping role? Edit `data_model.ROLE_REGISTRY` (and the
   corresponding checks in `data_mapping.build_mapped_dataset`) — the mapping UI in
   `home.py` is generated from the registry, not hand-authored per role.
 
 ## Before making a change here
 
-- Editing callbacks? They're all in `app/app.py` — check for an existing similar
-  callback's error-handling style (inconsistent across the file: some wrap in
-  `try/except: print(...)`, some have none) rather than assuming one pattern.
-- Touching Redis save/load/list UI? It's currently broken (see GOTCHAS) — confirm with
-  the user whether you're expected to fix the import or whether that's out of scope.
+- Editing callbacks? They're all in `app/app.py`. Error handling is now consistent —
+  wrap with `log_and_prevent_update`/`log_and_surface_error`
+  (`app/src/error_handling.py`) rather than a bespoke try/except; see an existing
+  callback for the pattern.
+- Touching Redis save/load/list UI? The app-level wiring is fixed and working (see
+  GOTCHAS for history) — `save_to_redis`/`load_from_redis`/`list_keys` are imported and
+  called normally in `app/app.py`. `docker-compose.yml`'s Redis *service* wiring is
+  still separately broken (see GOTCHAS/below) — don't assume `docker compose up` gives
+  you a working Redis to test against.
 - Touching PCA/PaCMAP performance? Flask-Caching is scaffolded but not wired up (see
   GOTCHAS) — don't assume caching exists.
 - Touching column mapping/validation? Read

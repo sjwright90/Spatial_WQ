@@ -3,6 +3,11 @@ import os
 from threading import Timer
 from waitress import serve
 from app import server
+from src.logging_config import configure_logging
+
+# Idempotent - `app`'s own import already calls this, but call explicitly here
+# too since server.py is itself a process entrypoint.
+configure_logging()
 
 # import sklearn.__check_build._check_build
 # import sklearn.metrics._pairwise_distances_reduction._datasets_pair
