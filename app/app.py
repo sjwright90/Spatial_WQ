@@ -626,27 +626,40 @@ def reset_color_overrides(
 
 # GENERATE THE MAP
 @app.callback(
-    Output("map", "figure"),
+    Output("map", "figure", allow_duplicate=True),
     [Input("map-group-dropdown", "value")],
     [Input("meta-data", "data")],
     State("map-relayout-store", "data"),
+    State("custom-color-overrides", "data"),
     prevent_initial_call=True,
 )
 @log_and_prevent_update("app.callbacks.map", fallback=empty_fig())
 @callback_prevent_initial_output
 def update_map(
-    map_group: Optional[str], meta_data: Optional[str], relayoutData: Optional[dict]
+    map_group: Optional[str],
+    meta_data: Optional[str],
+    relayoutData: Optional[dict],
+    custom_color_overrides: Optional[str],
 ) -> Any:
     """Rebuild the map figure for the selected plotting group, preserving the
     user's current pan/zoom state where possible.
 
-    Reverted: this used to also take custom-color-overrides as an Input so
-    the map recolored instantly on Apply/Reset, but that made every color
-    change rebuild the figure on a trigger other than "map-group-dropdown",
-    which skipped the relayoutData-reapply branch below and reset the view -
-    see docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md. Color
-    overrides now apply to the map the next time it naturally rebuilds
-    (group dropdown change or new upload) instead of live.
+    Does NOT take custom-color-overrides as an Input - that used to trigger
+    this callback directly so the map recolored instantly on Apply/Reset,
+    but every color change then rebuilt the whole figure on a trigger other
+    than "map-group-dropdown", which skipped the relayoutData-reapply
+    branch below and reset the view (see
+    docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md). Instant
+    recoloring is handled by `patch_map_colors` below via an in-place
+    `dash.Patch()` that never touches `layout.map`. But `update_map` can
+    still be triggered by something other than a deliberate color change
+    (e.g. `update_dropdowns` rewriting "map-group-dropdown"'s value in
+    reaction to an unrelated "session" write - color overrides live in
+    session too) and rebuild the figure from `meta_data["dict_generic_colors"]`
+    alone, which would otherwise silently drop any applied override the
+    instant that happens. Reading `custom_color_overrides` as a State (not
+    an Input) here keeps every full rebuild override-correct without
+    reintroducing this as a pan/zoom-resetting trigger.
     """
     if meta_data is None or not map_group:
         return empty_fig()
@@ -658,12 +671,18 @@ def update_map(
     df_coords = pd.read_json(io.StringIO(meta_data["df_coordinate"]))
 
     col_color = map_group
-    color_discrete_map = meta_data["dict_generic_colors"].get(col_color)
-    if color_discrete_map is None:
+    default_colors = meta_data["dict_generic_colors"].get(col_color)
+    if default_colors is None:
         # Stale/mismatched dropdown state (e.g. group renamed after this
         # dropdown's options were last built) - fall back to an
         # auto-generated palette instead of KeyError-ing.
         logger.debug("No color mapping found for group '%s'; using default palette", col_color)
+        color_discrete_map = None
+    else:
+        overrides = load_store(custom_color_overrides) or {}
+        color_discrete_map = merge_color_overrides({col_color: default_colors}, overrides).get(
+            col_color
+        )
     dict_kwargs_map = {
         "color": col_color,
         "color_discrete_map": color_discrete_map,
@@ -682,6 +701,51 @@ def update_map(
         if relayoutData:
             fig.update_layout(relayoutData)
     return fig
+
+
+# LIVE-RECOLOR THE MAP ON COLOR-OVERRIDE APPLY/RESET, WITHOUT TOUCHING PAN/ZOOM
+@app.callback(
+    Output("map", "figure", allow_duplicate=True),
+    Input("custom-color-overrides", "data"),
+    State("map-group-dropdown", "value"),
+    State("meta-data", "data"),
+    State("map", "figure"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.map", fallback=dash.no_update)
+def patch_map_colors(
+    custom_color_overrides: Optional[str],
+    map_group: Optional[str],
+    meta_data: Optional[str],
+    current_fig: Optional[dict],
+) -> Any:
+    """Patch each trace's `marker.color` in place when a color override is
+    applied/reset, instead of rebuilding the figure via `update_map` - a
+    `dash.Patch()` only ever touches the `data` (trace) keys it's given, so
+    `layout.map` (center/zoom/bearing/pitch) is left completely untouched
+    and the user's current pan/zoom survives. See
+    docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md Task 1.
+    """
+    if not map_group or meta_data is None or not current_fig:
+        raise PreventUpdate
+    meta_data = load_store(meta_data)
+    overrides = load_store(custom_color_overrides) or {}
+    default_colors = meta_data["dict_generic_colors"].get(map_group, {})
+    effective_colors = merge_color_overrides({map_group: default_colors}, overrides).get(
+        map_group, {}
+    )
+    # Trace names are always strings (Plotly stringifies them); the
+    # category values keying dict_generic_colors/overrides may not be
+    # (int/float categories survive the JSON round trip as their original
+    # type), so compare on the string form both ways.
+    effective_colors = {str(value): hex_color for value, hex_color in effective_colors.items()}
+
+    patched_fig = dash.Patch()
+    for idx, trace in enumerate(current_fig.get("data", [])):
+        hex_color = effective_colors.get(str(trace.get("name")))
+        if hex_color is not None:
+            patched_fig["data"][idx]["marker"]["color"] = hex_color
+    return patched_fig
 
 
 # STORE THE MAP RELAYOUT DATA

@@ -145,6 +145,56 @@ class TestPlottingFunctions(unittest.TestCase):
             ["Site1_2023-01-01", "Site1_2023-06-01"],
         )
 
+    def test_make_base_scatter_plot_splits_by_category_within_location(self):
+        # Same LOC_ID, but two ENTITY_ID rows (different dates) assigned to
+        # different PrimaryDomain categories - the location must be split
+        # into per-category sub-traces (correct color/hover per point),
+        # each getting its own legend entry (loc_code [date_range]) since a
+        # bare "Site1" name would otherwise be ambiguous between them.
+        df = pd.concat([self.df, self.df], ignore_index=True)
+        df["ENTITY_ID"] = [
+            "Site1_2023-01-01",
+            "Site2_2023-01-02",
+            "Site1_2023-06-01",
+            "Site2_2023-06-02",
+        ]
+        # Second visit to Site1 belongs to a different category than the
+        # first; Site2's two visits stay in the same category.
+        df.loc[2, "PrimaryDomain"] = "Domain2"
+        df.loc[2, "SecondaryDomain"] = "SubDomain2"
+        df.loc[2, "Date"] = "2023-06-01"
+        self.dict_color_map_primary["Domain2"] = "blue"
+        self.dict_color_map_secondary["SubDomain2"] = "yellow"
+
+        fig = make_base_scatter_plot(
+            df=df,
+            ctx=self._make_ctx(col_entity_id="ENTITY_ID"),
+            x_col="PMAP1",
+            y_col="PMAP2",
+            x_label="X Axis",
+            y_label="Y Axis",
+        )
+
+        site1_traces = [t for t in fig.data if t.name.startswith("Site1")]
+        # Split into two sub-traces (one per category) ...
+        self.assertEqual(len(site1_traces), 2)
+        # ... each with its own legend entry, distinguished by date range.
+        self.assertTrue(all(t.showlegend is not False for t in site1_traces))
+        self.assertEqual(
+            {t.name for t in site1_traces},
+            {"Site1 [2023-01-01]", "Site1 [2023-06-01]"},
+        )
+        colors = {t.marker.color for t in site1_traces}
+        self.assertEqual(colors, {"red", "blue"})
+        entity_ids = sorted(row[1] for t in site1_traces for row in t.customdata)
+        self.assertEqual(entity_ids, ["Site1_2023-01-01", "Site1_2023-06-01"])
+
+        # Site2's two visits share a category - still a single sub-trace,
+        # plain loc_code legend entry (no split, no date-range suffix).
+        site2_traces = [t for t in fig.data if t.name == "Site2"]
+        self.assertEqual(len(site2_traces), 1)
+        self.assertEqual(len(site2_traces[0].x), 2)
+
     def test_make_base_scatter_plot_falls_back_to_defaults_on_missing_group(self):
         # PrimaryDomain/SecondaryDomain/loc_id values with no entry in the
         # lookup dicts should degrade to the default color/marker (and log a

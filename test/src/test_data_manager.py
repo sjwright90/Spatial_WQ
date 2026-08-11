@@ -369,6 +369,85 @@ class TestDataPlotter(unittest.TestCase):
             ["1A_2023-01-01", "1A_2023-06-01"],
         )
 
+    def test_plot_pca_with_entity_id_splits_location_by_custom_category(self):
+        # Same Site_Name ("1A") twice, but the two ENTITY_ID rows belong to
+        # different Group1 categories (e.g. a custom, ENTITY_ID-scoped
+        # group) - each point must get its own category's color rather
+        # than both being painted with the first date's category.
+        _df_pca = pd.DataFrame(
+            {
+                "Site_Name": ["1A", "1A", "2B"],
+                "ENTITY_ID": ["1A_2023-01-01", "1A_2023-06-01", "2B_2023-01-02"],
+                "Sample_Date": ["2023-01-01", "2023-06-01", "2023-01-02"],
+                "Group1": ["A", "B", "B"],
+                "Group2": ["A", "B", "B"],
+                "Marker": [1, 1, 2],
+                "PC1": [0.1, 0.2, 0.3],
+                "PC2": [0.4, 0.5, 0.6],
+                "date": ["2023-01-01", "2023-06-01", "2023-01-02"],
+            }
+        )
+        _df_pmap = _df_pca.rename(columns={"PC1": "PMAP1", "PC2": "PMAP2"})
+        _ldg_df = pd.DataFrame(
+            {"PC1": [0.1, 0.2, 0.3], "PC2": [0.4, 0.5, 0.6], "metals": ["A", "B", "C"]}
+        )
+        working_data = json.dumps(
+            {
+                "df_plot_pca": _df_pca.to_json(orient="split"),
+                "df_plot_pmap": _df_pmap.to_json(orient="split"),
+                "ldg_df": _ldg_df.to_json(),
+                "expl_var": [0.1, 0.2],
+            }
+        )
+        meta_data = json.dumps(
+            {
+                "cols_key_plot": {"numeric_all": ["value1", "value2"]},
+                "cols_key_meta": {
+                    "loc_id": "Site_Name",
+                    "entity_id": "ENTITY_ID",
+                    "date": "date",
+                },
+                "dict_marker_map": {"1A": 1, "2B": 2},
+                "dict_generic_colors": {
+                    "Group1": {"A": "red", "B": "blue"},
+                    "Group2": {"A": "green", "B": "yellow"},
+                },
+                "loc_id_all": ["1A", "2B"],
+            }
+        )
+        plotter = DataPlotter(
+            working_data,
+            meta_data,
+            None,
+            self.plot_groups,
+            self.date_range,
+        )
+        fig = plotter.plot_pca()
+
+        site_1a_traces = [t for t in fig.data if t.name.startswith("1A")]
+        # 1A's two dates land in different categories - split into two
+        # sub-traces, each with the correct color for its own row.
+        self.assertEqual(len(site_1a_traces), 2)
+        colors_by_entity = {
+            row[1]: t.marker.color for t in site_1a_traces for row in t.customdata
+        }
+        self.assertEqual(
+            colors_by_entity,
+            {"1A_2023-01-01": "red", "1A_2023-06-01": "blue"},
+        )
+        # Each split sub-trace gets its own legend entry, distinguished by
+        # date range, instead of both collapsing under one ambiguous "1A".
+        self.assertEqual(
+            {t.name for t in site_1a_traces},
+            {"1A [2023-01-01]", "1A [2023-06-01]"},
+        )
+        self.assertTrue(all(t.showlegend is not False for t in site_1a_traces))
+
+        # 2B has only one category - unaffected, single trace as before.
+        site_2b_traces = [t for t in fig.data if t.name == "2B"]
+        self.assertEqual(len(site_2b_traces), 1)
+        self.assertEqual(site_2b_traces[0].marker.color, "blue")
+
     def test_missing_meta_data_key_raises_clear_error(self):
         # Regression test: a session blob missing an expected meta_data key
         # (e.g. from an older/incompatible app version) used to raise a bare

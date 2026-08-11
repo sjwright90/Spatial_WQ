@@ -96,6 +96,18 @@ python server.py   # NOT included in the Docker image (.dockerignore) — dev/de
 
 No CI config in the repo — tests run locally/manually only.
 
+- **Agents: never run `python app/app.py` (or `server.py`) yourselves, including in the
+  background for smoke-testing a change.** The user runs the app/smoke tests themselves.
+  A backgrounded dev server that's forgotten about survives past the session that
+  started it (`debug=False` — no hot reload) and silently keeps serving stale code on
+  port 8050; a later `python app/app.py` from the user (or another agent) can bind to a
+  *different* port or the user's browser can simply still be pointed at the old
+  process, making a already-fixed bug look unfixed. This exact failure mode burned a
+  full debugging cycle once already — see
+  [docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md](docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md).
+  Verify changes via `PYTHONPATH=. pytest test/`, direct callback invocation, or reading
+  the layout/diff — not by launching the server.
+
 - `app/requirements.txt` is **UTF-16LE encoded**. If `pip install -r requirements.txt`
   misbehaves, check encoding before debugging anything else.
 - `docker-compose.yml` is mid-refactor and will not stand up the `app` service as

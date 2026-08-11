@@ -99,7 +99,11 @@ def make_map(
         "width": fig_width_px_map,
     }
     bounds = _bounds_from_coordinates(df[col_lat].values, df[col_lon].values)
-    kwargs = {k: v for k, v in kwargs.items() if k in inspect.signature(px.scatter_map).parameters}
+    kwargs = {
+        k: v
+        for k, v in kwargs.items()
+        if k in inspect.signature(px.scatter_map).parameters
+    }
     _kwargs.update(kwargs)
     if "color" not in _kwargs:
         raise KeyError("make_map requires a 'color' kwarg naming the group column")
@@ -118,7 +122,7 @@ def make_map(
     )
     fig.update_layout(
         clickmode="event+select",
-        map_bounds=bounds,
+        # map_bounds=bounds, # keep commented out! locks the map to a fixed box, which is not what we want for the user-interactive map.
         map_style="white-bg",
         map_layers=[
             {
@@ -144,7 +148,9 @@ def make_map(
     return fig
 
 
-def _find_axis_limits(df: pd.DataFrame, x_col: str, y_col: str, margin: float = 0.1) -> tuple:
+def _find_axis_limits(
+    df: pd.DataFrame, x_col: str, y_col: str, margin: float = 0.1
+) -> tuple:
     """Axis (min, max) bounds for x_col/y_col, padded by `margin` fraction."""
     x_min = df[x_col].min()
     x_max = df[x_col].max()
@@ -153,6 +159,23 @@ def _find_axis_limits(df: pd.DataFrame, x_col: str, y_col: str, margin: float = 
     x_margin = margin * (x_max - x_min)
     y_margin = margin * (y_max - y_min)
     return x_min - x_margin, x_max + x_margin, y_min - y_margin, y_max + y_margin
+
+
+def _format_date_range(df: pd.DataFrame, date_col: Optional[str]) -> str:
+    """min->max formatted date range for `df`'s rows, used to label a
+    split-by-category legend entry (see make_base_scatter_plot) - a bare
+    location id would otherwise repeat identically across every split
+    entry for that location, so the legend needs something that
+    distinguishes them."""
+    if not date_col or date_col not in df.columns:
+        return "unknown date range"
+    dates = pd.to_datetime(df[date_col], errors="coerce").dropna()
+    if dates.empty:
+        return "unknown date range"
+    date_min, date_max = dates.min(), dates.max()
+    if date_min == date_max:
+        return f"{date_min.date()}"
+    return f"{date_min.date()}->{date_max.date()}"
 
 
 def _generate_text(
@@ -176,7 +199,9 @@ def _generate_text(
     else:
         texts = [
             f"<b>{site}</b><br><b>Primary Domain:</b> {p}<br><b>Secondary Domain:</b> {s}<br><b>Date:</b> {date}"
-            for p, s, date in zip(df[primary_domain], df[secondary_domain], formatted_dates)
+            for p, s, date in zip(
+                df[primary_domain], df[secondary_domain], formatted_dates
+            )
         ]
 
     return texts
@@ -204,24 +229,8 @@ def make_base_scatter_plot(
         xaxis=dict(autorange=False, range=[xmin, xmax]),
         yaxis=dict(autorange=False, range=[ymin, ymax]),
     )
+    entity_col = ctx.col_entity_id if ctx.col_entity_id else ctx.col_loc_id
     for loc_code, group_df in df.groupby(ctx.col_loc_id):
-        primary_value = group_df[ctx.col_primary_domain].unique()[0]
-        secondary_value = group_df[ctx.col_secondary_domain].unique()[0]
-        color_face = ctx.dict_color_map_primary.get(primary_value)
-        color_line = ctx.dict_color_map_secondary.get(secondary_value)
-        if color_face is None or color_line is None:
-            # Stale/mismatched group value (e.g. dropdown state built before
-            # a re-upload) - fall back to a generic color rather than
-            # KeyError-ing the whole plot.
-            logger.warning(
-                "No color mapping for group value(s) %r/%r; using default color",
-                primary_value,
-                secondary_value,
-            )
-            color_face = color_face or _DEFAULT_COLOR
-            color_line = color_line or _DEFAULT_COLOR
-        size_line = size_line_1 if color_line != color_face else size_line_2
-        color_line = color_line if color_line != color_face else "black"
         marker_symbol = ctx.name_marker_map.get(loc_code)
         if marker_symbol is None:
             logger.warning(
@@ -229,36 +238,85 @@ def make_base_scatter_plot(
                 loc_code,
             )
             marker_symbol = _DEFAULT_MARKER_SYMBOL
-        # customdata carries per-point identity (site + composite site/date
-        # entity id) without affecting trace grouping/legend, which stays
-        # collapsed to one entry per site (loc_code) above.
-        entity_col = ctx.col_entity_id if ctx.col_entity_id else ctx.col_loc_id
-        plotly_fig.add_trace(
-            go.Scatter(
-                x=group_df[x_col],
-                y=group_df[y_col],
-                mode="markers",
-                name=loc_code,
-                marker=dict(
-                    size=size_marker,
-                    color=color_face,
-                    line={
-                        "color": color_line,
-                        "width": size_line,
-                    },
-                    symbol=marker_symbol,
-                ),
-                customdata=group_df[[ctx.col_loc_id, entity_col]].values,
-                text=_generate_text(
-                    loc_code,
-                    group_df,
-                    ctx.col_primary_domain,
-                    ctx.col_secondary_domain,
-                    ctx.col_date,
-                ),
-                hoverinfo="text",
-            )
+        # A location's rows can span more than one primary/secondary
+        # domain value when custom groups are scoped to ctx.col_entity_id
+        # (e.g. different dates at the same LOCATION_ID assigned to
+        # different custom categories) - taking .unique()[0] for the whole
+        # group would silently paint every point at that location with
+        # only the first date's category color. Split into one sub-trace
+        # per distinct (primary, secondary) pair actually present.
+        # itertuples (positional) rather than iterrows/label-indexing -
+        # col_primary_domain and col_secondary_domain are frequently the
+        # same column name, which would otherwise make this frame have two
+        # identically-labeled columns and turn label-based row access into
+        # an ambiguous Series instead of a scalar.
+        domain_pairs = list(
+            group_df[[ctx.col_primary_domain, ctx.col_secondary_domain]]
+            .drop_duplicates()
+            .itertuples(index=False, name=None)
         )
+        # A single category at this location: keep the plain one-trace,
+        # one-legend-entry-per-location behavior. Multiple categories:
+        # each needs its own legend entry (a reader needs to see that this
+        # location has split categories, and which is which), so name each
+        # sub-trace "loc_code [date_min->date_max]" instead of collapsing
+        # them under one shared, ambiguous "loc_code" entry.
+        split_by_category = len(domain_pairs) > 1
+        for primary_value, secondary_value in domain_pairs:
+            sub_df = group_df[
+                (group_df[ctx.col_primary_domain] == primary_value)
+                & (group_df[ctx.col_secondary_domain] == secondary_value)
+            ]
+            trace_name = (
+                f"{loc_code} [{_format_date_range(sub_df, ctx.col_date)}]"
+                if split_by_category
+                else loc_code
+            )
+            color_face = ctx.dict_color_map_primary.get(primary_value)
+            color_line = ctx.dict_color_map_secondary.get(secondary_value)
+            if color_face is None or color_line is None:
+                # Stale/mismatched group value (e.g. dropdown state built before
+                # a re-upload) - fall back to a generic color rather than
+                # KeyError-ing the whole plot.
+                logger.warning(
+                    "No color mapping for group value(s) %r/%r; using default color",
+                    primary_value,
+                    secondary_value,
+                )
+                color_face = color_face or _DEFAULT_COLOR
+                color_line = color_line or _DEFAULT_COLOR
+            size_line = size_line_1 if color_line != color_face else size_line_2
+            color_line = color_line if color_line != color_face else "black"
+            # customdata carries per-point identity (site + composite
+            # site/date entity id) without affecting trace grouping/legend.
+            plotly_fig.add_trace(
+                go.Scatter(
+                    x=sub_df[x_col],
+                    y=sub_df[y_col],
+                    mode="markers",
+                    name=trace_name,
+                    legendgroup=str(loc_code),
+                    showlegend=True,
+                    marker=dict(
+                        size=size_marker,
+                        color=color_face,
+                        line={
+                            "color": color_line,
+                            "width": size_line,
+                        },
+                        symbol=marker_symbol,
+                    ),
+                    customdata=sub_df[[ctx.col_loc_id, entity_col]].values,
+                    text=_generate_text(
+                        loc_code,
+                        sub_df,
+                        ctx.col_primary_domain,
+                        ctx.col_secondary_domain,
+                        ctx.col_date,
+                    ),
+                    hoverinfo="text",
+                )
+            )
     return plotly_fig
 
 
