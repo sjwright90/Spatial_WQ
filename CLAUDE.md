@@ -45,6 +45,17 @@ One flat Flask+Dash app, no blueprints/router:
   (`process_dimension_reduction`). `run_pca` computes up to `MAX_PCA_COMPONENTS` (5,
   capped by available analytes/samples), not just PC1/PC2, so the biplot can plot any
   computed component pair.
+- `app/src/clustering_functions.py` — KMeans "auto-cluster" pipeline
+  (`process_clustering`), feeding the custom-group workflow. Mirrors
+  `process_dimension_reduction`'s subset/CLR-transform steps on the same
+  analytes/locations last applied to the PCA/PaCMAP plots
+  (`plotting_data.feature_selection_dropdown_value`/`loc_id_dropdown_value`),
+  then clusters on a chosen `feature_space`: `"clr"` (the CLR-transformed
+  analyte matrix) or `"pca"` (unscaled PCA scores over all computed
+  components, via `build_pca_feature_matrix` — deliberately NOT the min-max
+  `pc_scaler`-scaled scores `make_df_for_biplot` produces for the biplot,
+  since that scaling would distort each component's variance-proportional
+  range before clustering on it).
 - `app/src/plotting.py` — all Plotly figure builders (`make_map`, `make_fig_pca`,
   `make_fig_pmap`). Mostly untouched by the mapping refactor — see "Explicit column
   mapping" below for why — but `make_fig_pca` does take an arbitrary `x_col`/`y_col`

@@ -207,6 +207,49 @@ open_custom_group_button = html.Button(
 # whole point of this panel is that the user lassoes points on the map/plots
 # *while* it's open, repeatedly, to build up multiple categories, so it must
 # not block interaction with the rest of the page.
+cluster_feature_space_dropdown = dcc.Dropdown(
+    id="cluster-feature-space",
+    options=[
+        {"label": "CLR feature space (selected analytes)", "value": "clr"},
+        {"label": "PCA space (all computed components)", "value": "pca"},
+    ],
+    value="clr",
+    clearable=False,
+    style=DROPDOWN_UNI_STYLE,
+)
+
+cluster_n_clusters_input = dcc.Input(
+    id="cluster-n-clusters",
+    type="number",
+    min=2,
+    step=1,
+    value=3,
+    placeholder="Number of clusters",
+)
+
+run_clustering_button = html.Button(
+    "Run Clustering",
+    id="run-clustering-button",
+    style=BUTTON_STYLE,
+)
+
+auto_cluster_section = html.Div(
+    [
+        html.P(
+            "Auto-cluster (KMeans) - runs on the analytes/locations currently "
+            "applied ('Apply' button) to the PCA/PaCMAP plots. Writes the "
+            "resulting clusters below as categories, replacing any "
+            "categories already added - review/rename before finishing.",
+            style={"font-size": "0.85em"},
+        ),
+        html.Div(
+            [cluster_feature_space_dropdown, cluster_n_clusters_input, run_clustering_button],
+            className="d-flex flex-row align-items-end",
+            style={"gap": "8px"},
+        ),
+    ]
+)
+
 custom_group_modal = dbc.Offcanvas(
     [
         dcc.Input(
@@ -214,6 +257,8 @@ custom_group_modal = dbc.Offcanvas(
             type="text",
             placeholder="New group column name",
         ),
+        html.Hr(),
+        auto_cluster_section,
         html.Hr(),
         html.P(
             "Lasso/box-select points on the map or a biplot, then click "

@@ -27,6 +27,7 @@ from src.data_process import (
 
 # from src.compositional_data_functions import clr_transform_scale
 from src.dimension_reduction_functions import process_dimension_reduction
+from src.clustering_functions import process_clustering
 from src.callbacks import callback_prevent_initial_output
 from src.logging_config import configure_logging, get_logger
 from src.error_handling import log_and_prevent_update, log_and_surface_error
@@ -1128,6 +1129,86 @@ def finalize_custom_group(
         duration=10000,
     )
     return dump_store(session), dump_store(session["meta_data"]), False, {}, alert
+
+
+# CUSTOM GROUP: auto-generate categories via KMeans clustering, straight into the draft
+@app.callback(
+    Output("custom-group-modal", "is_open", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "options", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "value", allow_duplicate=True),
+    Output("custom-group-draft", "data", allow_duplicate=True),
+    Output("custom-group-categories-preview", "children", allow_duplicate=True),
+    Output("global-alert-container", "children", allow_duplicate=True),
+    Input("run-clustering-button", "n_clicks"),
+    State("cluster-feature-space", "value"),
+    State("cluster-n-clusters", "value"),
+    State("session", "data"),
+    prevent_initial_call=True,
+)
+@log_and_surface_error(
+    "app.callbacks.custom_group",
+    error_output_index=5,
+    fallback=(dash.no_update,) * 5,
+)
+def run_clustering_into_draft(
+    n_clicks: Optional[int],
+    feature_space: Optional[str],
+    n_clusters: Optional[int],
+    session: Optional[str],
+) -> tuple:
+    """Run KMeans on the analytes/locations currently applied to the
+    PCA/PaCMAP plots and write the resulting clusters straight into the
+    custom-group-draft as `{"Cluster 0": [entity_id, ...], ...}`, replacing
+    any existing draft - this is a distinct "auto-generate a group" action
+    from the manual lasso-select workflow, not an incremental addition to it.
+    The user still reviews/renames the categories (and can rename the group
+    column itself) before hitting Finalize, same as the manual flow.
+    """
+    if session is None:
+        raise PreventUpdate
+
+    session = load_store(session)
+    meta_data = session["meta_data"]
+    cols_key_meta = meta_data["cols_key_meta"]
+    cols_key_plot = meta_data["cols_key_plot"]
+    entity_id_col = cols_key_meta["entity_id"]
+    date_col = cols_key_meta["date"]
+    df_master = json_to_pandas(session, "df_master", date_col)
+
+    # Same analytes/locations last applied to the PCA/PaCMAP plots (not
+    # necessarily whatever the dropdowns are currently showing if the user
+    # hasn't hit Apply since changing them) - see plotting_data.
+    plotting_data = session["plotting_data"]
+    feature_selection = plotting_data.get("feature_selection_dropdown_value") or []
+    loc_id_selection = plotting_data.get("loc_id_dropdown_value") or []
+
+    df_clusters = process_clustering(
+        df_master,
+        cols_key_meta["loc_id"],
+        entity_id_col,
+        cols_key_plot["numeric_simple"],
+        cols_key_plot["numeric_clr"],
+        feature_selection,
+        loc_id_selection,
+        feature_space,
+        n_clusters,
+    )
+    assignments = {
+        f"Cluster {label}": group[entity_id_col].tolist()
+        for label, group in df_clusters.groupby("cluster")
+    }
+
+    options = _build_entity_dropdown_options(
+        df_master, cols_key_meta["loc_id"], entity_id_col, date_col
+    )
+    alert = dbc.Alert(
+        f"✅ Generated {len(assignments)} cluster(s) from {len(df_clusters)} sample(s) - "
+        "review/rename below, then Finish & Create Group.",
+        color="success",
+        dismissable=True,
+        duration=10000,
+    )
+    return True, options, [], assignments, _render_custom_group_preview(assignments), alert
 
 
 # CUSTOM GROUP: cancel out of the modal without creating anything

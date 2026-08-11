@@ -39,6 +39,7 @@ All three entry points converge on the same Dash app/layout built in `app/app.py
 │       ├── data_process.py               # column-reshaping/color-dict/coordinate-extraction helpers, JSON<->pandas (de)serialization (regex column classifiers removed - see below)
 │       ├── compositional_data_functions.py # CLR (centered log-ratio) transform + StandardScaler for compositional geochem data
 │       ├── dimension_reduction_functions.py # PCA + PaCMAP pipeline (process_dimension_reduction, run_pca, run_pmap)
+│       ├── clustering_functions.py       # NEW: KMeans auto-cluster pipeline (process_clustering) feeding the custom-group draft; clusters on CLR or unscaled-PCA feature space of the currently-applied analytes/locations
 │       ├── plotting.py                   # Plotly figure builders: make_map (mapbox), make_fig_pca, make_fig_pmap, empty_fig
 │       ├── cache_initialize.py           # Flask-Caching cache-key builder + dataframe content hashing (md5 of hash_pandas_object)
 │       ├── session_manager.py            # Redis read/write helpers (save_to_redis/load_from_redis/list_keys/...)
@@ -50,6 +51,7 @@ All three entry points converge on the same Dash app/layout built in `app/app.py
         ├── test_data_manager.py
         ├── test_data_process.py
         ├── test_compositional_data_functions.py
+        ├── test_clustering_functions.py  # NEW
         ├── test_plotting.py
         └── test_cache_initialize.py
 ```
