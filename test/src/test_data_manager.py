@@ -1,9 +1,11 @@
 import unittest
 import base64
+import io
 import json
 import pandas as pd
-from app.src.data_manager import DataPreprocessor, DataPlotter
+from app.src.data_manager import DataPreprocessor, DataPlotter, SessionManager
 from app.src.data_model import ColumnMapping
+from app.src.data_process import json_to_pandas
 
 
 def encode_csv(csv_content: str) -> str:
@@ -132,6 +134,72 @@ class TestDataPreprocessor(unittest.TestCase):
         self.assertTrue(all(isinstance(v, str) for v in preprocessor.loc_id_all))
         self.assertTrue(all(isinstance(v, str) for v in preprocessor.df_master["Site_Name"]))
         self.assertEqual(set(preprocessor.dict_marker_map.keys()), set(preprocessor.loc_id_all))
+
+
+class TestSessionManagerAddCustomGroup(unittest.TestCase):
+    def setUp(self):
+        csv_content = (
+            "Site_Name,Sample_Date,Group,Marker,Longitude,Latitude,Zinc,Copper,MarkerSize\n"
+            "1,2023-01-01,A,circle,10.5,50.0,0.1,1,10\n"
+            "2,2023-01-02,B,square,-20.0,60.0,0.2,2,10\n"
+            "3,2023-01-03,A,circle,30.0,70.1,0.3,3,10\n"
+        )
+        mapping = ColumnMapping(
+            location_id="Site_Name",
+            latitude="Latitude",
+            longitude="Longitude",
+            plotting_groups=["Group"],
+            numeric_simple=["Copper"],
+            numeric_clr=["Zinc"],
+            date="Sample_Date",
+            marker_symbol="Marker",
+            map_marker_size="MarkerSize",
+        )
+        preprocessor = DataPreprocessor(encode_csv(csv_content), mapping)
+        self.session = preprocessor.get_session_dict()
+        self.entity_ids = json_to_pandas(self.session, "df_master", "Sample_Date")[
+            "ENTITY_ID"
+        ].tolist()
+
+    def test_add_custom_group_appends_column_and_updates_meta(self):
+        assignments = {"MyCat": [self.entity_ids[0]]}
+        session = SessionManager.add_custom_group(self.session, "CustomGroup", assignments)
+
+        df_master = json_to_pandas(session, "df_master", "Sample_Date")
+        self.assertIn("CustomGroup", df_master.columns)
+
+        meta_data = session["meta_data"]
+        self.assertIn("CustomGroup", meta_data["cols_key_meta"]["plotting_groups"])
+        self.assertIn("CustomGroup", meta_data["cols_key_plot"]["meta"])
+        self.assertIn("CustomGroup", meta_data["dict_generic_colors"])
+        self.assertIn("CustomGroup", meta_data["custom_group_columns"])
+
+        for key in (
+            "map_group_dropdown_options",
+            "plot_group_dropdown_1_options",
+            "plot_group_dropdown_2_options",
+        ):
+            self.assertIn("CustomGroup", session["plotting_data"][key])
+
+    def test_add_custom_group_recomputes_df_coordinate(self):
+        assignments = {"MyCat": [self.entity_ids[0]]}
+        session = SessionManager.add_custom_group(self.session, "CustomGroup", assignments)
+        df_coordinate = pd.read_json(io.StringIO(session["meta_data"]["df_coordinate"]))
+        self.assertIn("CustomGroup", df_coordinate.columns)
+
+    def test_add_custom_group_rejects_reserved_or_duplicate_name(self):
+        for bad_name in ("LATITUDE", "Group", "Copper"):
+            with self.assertRaises(ValueError):
+                SessionManager.add_custom_group(
+                    self.session, bad_name, {"MyCat": [self.entity_ids[0]]}
+                )
+
+    def test_add_custom_group_auto_colors_new_category_values(self):
+        assignments = {"MyCat": [self.entity_ids[0]]}
+        session = SessionManager.add_custom_group(self.session, "CustomGroup", assignments)
+        color_dict = session["meta_data"]["dict_generic_colors"]["CustomGroup"]
+        self.assertIn("MyCat", color_dict)
+        self.assertIn("Unassigned", color_dict)
 
 
 class TestDataPlotter(unittest.TestCase):

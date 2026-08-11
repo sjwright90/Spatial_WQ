@@ -2,6 +2,8 @@ from .plotting import make_fig_pca, make_fig_pmap, empty_fig, PlotContext
 from .data_process import (
     df_col_group_to_dict,
     make_plotting_group_color_dicts,
+    make_color_dict,
+    assign_custom_group_column,
     extract_coordinate_dataframe,
     subset_df_locIds,
     pandas_to_json,
@@ -159,11 +161,13 @@ class DataPreprocessor:
                 "loc_id_all": self.loc_id_all,
                 "cols_numeric_all": self.cols_numeric_all,
                 "df_coordinate": self.df_coordinate.to_json(),
+                "custom_group_columns": [],  # user-created group columns, see add_custom_group
             },
             "data_hash": {
                 "data_hash": self.content_hash,
             },
             "working_data": None,  # Placeholder for working data
+            "custom_color_overrides": {},  # {group_col: {value: hex}}, see SessionManager.add_custom_group
             "plotting_data": {
                 "feature_selection_dropdown_options": numeric_all,
                 "feature_selection_dropdown_value": numeric_all,
@@ -335,6 +339,120 @@ class DataPlotter:
 
 class SessionManager:
     """Packaging helpers for building the `working_data` session payload."""
+
+    # Column names/roles that always mean something else to plotting.py/the
+    # mapping layer - a user-created group column can never collide with
+    # these regardless of what's currently mapped.
+    _RESERVED_GROUP_NAMES = {
+        "ENTITY_ID",
+        "LATITUDE",
+        "LONGITUDE",
+        "MAP-MARKER-SIZE",
+        "PC1",
+        "PC2",
+        "PMAP1",
+        "PMAP2",
+        ".",
+    }
+
+    @staticmethod
+    def add_custom_group(
+        session: Dict[str, Any], new_col_name: str, assignments: Dict[str, List[str]]
+    ) -> Dict[str, Any]:
+        """Create a new user-defined categorical plotting-group column,
+        assigning rows per `assignments` (`{category_value: [entity_id, ...]}`),
+        and thread it through every downstream structure that needs to know
+        about it (dropdown options, color dict, map coordinate table).
+
+        Parameters
+        ----------
+        session : dict
+            The *loaded* (not JSON-string) session dict, as produced by
+            `store_utils.load_store(session_json)`.
+        new_col_name : str
+            Name of the new group column. Must not collide with a reserved
+            name, an existing plotting-group/meta column, or a numeric
+            analyte column.
+        assignments : dict
+            `{category_value: [entity_id, ...]}` - see `assign_custom_group_column`.
+
+        Returns
+        -------
+        dict
+            The updated session dict (same object, mutated in place and
+            returned for convenience).
+
+        Raises
+        ------
+        ValueError
+            On an empty/collision name, or if `assignments` references an
+            unknown entity_id (propagated from `assign_custom_group_column`).
+        """
+        meta_data = _require(session, "meta_data", "session")
+        cols_key_meta = _require(meta_data, "cols_key_meta", "meta_data")
+        cols_key_plot = _require(meta_data, "cols_key_plot", "meta_data")
+
+        if not new_col_name or not new_col_name.strip():
+            raise ValueError("Custom group name cannot be empty.")
+        loc_id_col = _require(cols_key_meta, "loc_id", "cols_key_meta")
+        existing_names = (
+            SessionManager._RESERVED_GROUP_NAMES
+            | {loc_id_col}
+            | set(cols_key_plot.get("meta", []))
+            | set(cols_key_plot.get("numeric_all", []))
+        )
+        if new_col_name in existing_names:
+            raise ValueError(f"'{new_col_name}' is already in use - choose a different name.")
+
+        date_col = cols_key_meta.get("date")
+        entity_id_col = _require(cols_key_meta, "entity_id", "cols_key_meta")
+
+        df_master = json_to_pandas(session, "df_master", date_col)
+        df_master = assign_custom_group_column(df_master, entity_id_col, new_col_name, assignments)
+
+        plotting_groups = list(cols_key_meta["plotting_groups"]) + [new_col_name]
+        cols_key_meta["plotting_groups"] = plotting_groups
+        cols_key_plot["meta"] = list(cols_key_plot.get("meta", [])) + [new_col_name]
+        meta_data["custom_group_columns"] = list(meta_data.get("custom_group_columns", [])) + [
+            new_col_name
+        ]
+
+        dict_generic_colors = meta_data.get("dict_generic_colors", {})
+        dict_generic_colors[new_col_name] = make_color_dict(df_master, new_col_name)
+        meta_data["dict_generic_colors"] = dict_generic_colors
+
+        long_lat = _require(cols_key_meta, "long_lat", "cols_key_meta")
+        df_coordinate = extract_coordinate_dataframe(
+            df_master,
+            plotting_groups,
+            loc_id_col,
+            long_lat[0],
+            long_lat[1],
+            col_marker_size=cols_key_meta.get("map_marker_size"),
+        )
+        meta_data["df_coordinate"] = df_coordinate.to_json()
+
+        plotting_data = _require(session, "plotting_data", "session")
+        for key in (
+            "map_group_dropdown_options",
+            "plot_group_dropdown_1_options",
+            "plot_group_dropdown_2_options",
+        ):
+            options = list(plotting_data.get(key, []))
+            if new_col_name not in options:
+                options.append(new_col_name)
+            plotting_data[key] = options
+
+        session["df_master"] = pandas_to_json(df_master, date_col)
+        session["meta_data"] = meta_data
+        session["plotting_data"] = plotting_data
+        logger.info(
+            "Created custom group column '%s' with %d categor%s.",
+            new_col_name,
+            len(assignments),
+            "y" if len(assignments) == 1 else "ies",
+        )
+        return session
 
     @staticmethod
     def package_plotting_data(

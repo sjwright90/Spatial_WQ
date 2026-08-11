@@ -116,11 +116,6 @@ No CI config in the repo — tests run locally/manually only.
   (`app/src/error_handling.py`) for consistent exception logging instead of hand-rolled
   try/except — reach for those instead of writing a new bespoke try/except block. Load
   dcc.Store JSON payloads via `store_utils.load_store` rather than a bare `json.loads(...)`.
-- Commented-out dead code is generally left in place elsewhere (e.g. the old regex-based
-  column-classification code deleted, not commented out, when the mapping refactor
-  replaced it — see codebase-map.md; that was an explicit no-backward-compat decision,
-  not the norm) — don't delete commented-out code casually without checking whether it's
-  there deliberately.
 - Docstrings (numpy-style, at least a one-liner) are now present across all of
   `app/src/` and `app/app.py`'s callbacks, not just the four files that originally had
   them (`data_process.py`, `data_mapping.py`, `dimension_reduction_functions.py`,

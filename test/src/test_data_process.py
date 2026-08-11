@@ -8,6 +8,10 @@ from app.src.data_process import (
     make_color_dict,
     find_make_color_dict,
     make_plotting_group_color_dicts,
+    merge_color_overrides,
+    assign_custom_group_column,
+    build_color_mapping_export_df,
+    build_custom_group_export_df,
     extract_coordinate_dataframe,
     subset_df_locIds,
     subset_df_numericFeatures,
@@ -34,6 +38,7 @@ class TestDataProcess(unittest.TestCase):
                 "Zinc": [0.1, 0.2, 0.3],
                 "Copper": [1, 2, 3],
                 "MarkerSize": [10, 20, 10],
+                "EntityId": ["e1", "e2", "e3"],
             }
         )
         self.df["Sample_Date"] = pd.to_datetime(self.df["Sample_Date"])
@@ -75,6 +80,88 @@ class TestDataProcess(unittest.TestCase):
             df, ["Group"], group_colors={"Group": "GroupColor"}
         )
         self.assertEqual(result["Group"], {"A": "#FF0000", "B": "#00FF00"})
+
+    def test_merge_color_overrides_no_overrides_returns_same_values(self):
+        default_colors = {"Group": {"A": "#111111", "B": "#222222"}}
+        result = merge_color_overrides(default_colors, None)
+        self.assertEqual(result, default_colors)
+        result_empty = merge_color_overrides(default_colors, {})
+        self.assertEqual(result_empty, default_colors)
+
+    def test_merge_color_overrides_applies_override_for_matching_group(self):
+        default_colors = {"Group": {"A": "#111111", "B": "#222222"}}
+        overrides = {"Group": {"A": "#FF0000"}}
+        result = merge_color_overrides(default_colors, overrides)
+        self.assertEqual(result["Group"]["A"], "#FF0000")
+        self.assertEqual(result["Group"]["B"], "#222222")
+
+    def test_merge_color_overrides_does_not_mutate_input_dict(self):
+        default_colors = {"Group": {"A": "#111111", "B": "#222222"}}
+        original_group_dict = default_colors["Group"]
+        overrides = {"Group": {"A": "#FF0000"}}
+        merge_color_overrides(default_colors, overrides)
+        self.assertIs(default_colors["Group"], original_group_dict)
+        self.assertEqual(default_colors["Group"]["A"], "#111111")
+
+    def test_merge_color_overrides_string_key_matches_numeric_group_value(self):
+        default_colors = {"Group": {1: "#111111", 2: "#222222"}}
+        overrides = {"Group": {"1": "#FF0000"}}
+        result = merge_color_overrides(default_colors, overrides)
+        self.assertEqual(result["Group"][1], "#FF0000")
+
+    def test_merge_color_overrides_group_not_present_in_overrides_untouched(self):
+        default_colors = {"Group": {"A": "#111111"}, "Other": {"X": "#333333"}}
+        overrides = {"Group": {"A": "#FF0000"}}
+        result = merge_color_overrides(default_colors, overrides)
+        self.assertEqual(result["Other"], {"X": "#333333"})
+
+    def test_assign_custom_group_column_default_and_assigned_values(self):
+        result = assign_custom_group_column(
+            self.df, "EntityId", "CustomGroup", {"Cat1": ["e1"]}
+        )
+        self.assertEqual(
+            result.set_index("EntityId")["CustomGroup"].to_dict(),
+            {"e1": "Cat1", "e2": "Unassigned", "e3": "Unassigned"},
+        )
+
+    def test_assign_custom_group_column_unknown_entity_id_raises(self):
+        with self.assertRaises(ValueError):
+            assign_custom_group_column(self.df, "EntityId", "CustomGroup", {"Cat1": ["does-not-exist"]})
+
+    def test_assign_custom_group_column_conflicting_assignment_last_wins(self):
+        result = assign_custom_group_column(
+            self.df, "EntityId", "CustomGroup", {"Cat1": ["e1"], "Cat2": ["e1"]}
+        )
+        self.assertEqual(result.set_index("EntityId").loc["e1", "CustomGroup"], "Cat2")
+
+    def test_assign_custom_group_column_does_not_mutate_input_df(self):
+        assign_custom_group_column(self.df, "EntityId", "CustomGroup", {"Cat1": ["e1"]})
+        self.assertNotIn("CustomGroup", self.df.columns)
+
+    def test_build_color_mapping_export_df_shape_and_values(self):
+        effective_colors = {"Group": {"A": "#FF0000", "B": "#222222"}}
+        result = build_color_mapping_export_df(self.df, ["Group"], "EntityId", effective_colors)
+        self.assertEqual(list(result.columns), ["ENTITY_ID", "CATEGORY_COL", "CATEGORY_VALUE", "CATEGORY_COLOR"])
+        self.assertEqual(result.shape[0], 3)
+        row_e1 = result[result["ENTITY_ID"] == "e1"].iloc[0]
+        self.assertEqual(row_e1["CATEGORY_COLOR"], "#FF0000")
+
+    def test_build_custom_group_export_df_columns_with_date(self):
+        df = self.df.copy()
+        df["CustomGroup"] = ["Cat1", "Cat2", "Cat1"]
+        result = build_custom_group_export_df(df, "EntityId", "Site_Name", "Sample_Date", ["CustomGroup"])
+        self.assertEqual(list(result.columns), ["ENTITY_ID", "LOCATION_ID", "DATE", "CustomGroup"])
+
+    def test_build_custom_group_export_df_columns_without_date(self):
+        df = self.df.copy()
+        df["CustomGroup"] = ["Cat1", "Cat2", "Cat1"]
+        result = build_custom_group_export_df(df, "EntityId", "Site_Name", None, ["CustomGroup"])
+        self.assertEqual(list(result.columns), ["ENTITY_ID", "LOCATION_ID", "CustomGroup"])
+
+    def test_build_custom_group_export_df_empty_custom_columns(self):
+        result = build_custom_group_export_df(self.df, "EntityId", "Site_Name", "Sample_Date", [])
+        self.assertEqual(result.shape[0], 0)
+        self.assertEqual(list(result.columns), ["ENTITY_ID", "LOCATION_ID", "DATE"])
 
     def test_extract_coordinate_dataframe_with_marker_size_column(self):
         result = extract_coordinate_dataframe(

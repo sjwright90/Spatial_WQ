@@ -134,8 +134,136 @@ download_button = html.Div(
             id="download-session-button",
             style=BUTTON_STYLE,
         ),
+        dcc.Download(id="download-color-mapping-csv"),
+        html.Button(
+            "Download Color Mapping CSV",
+            id="download-color-mapping-button",
+            style=BUTTON_STYLE,
+        ),
+        dcc.Download(id="download-custom-groups-csv"),
+        html.Button(
+            "Download Custom Groups CSV",
+            id="download-custom-groups-button",
+            style=BUTTON_STYLE,
+        ),
     ]
 )
+
+# COLOR PICKER (custom per-category color overrides for any plotting group)
+open_color_picker_button = html.Button(
+    "Customize Colors",
+    id="open-color-picker-button",
+    style=BUTTON_STYLE,
+)
+
+# A dbc.Offcanvas, not a dbc.Modal: modals backdrop the whole page while
+# open, which blocks interacting with the map/plots behind them - a plain
+# color-swatch tweak shouldn't require closing the panel first. backdrop=False
+# + scrollable=True keep the rest of the page fully clickable/scrollable while
+# this is open (see docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md).
+color_picker_modal = dbc.Offcanvas(
+    [
+        dcc.Dropdown(
+            id="color-picker-group-dropdown",
+            options=[],
+            value=None,
+            multi=False,
+            style=DROPDOWN_UNI_STYLE,
+            placeholder="Select a plotting-group column",
+        ),
+        html.Div(id="color-picker-value-list", children=[]),
+        html.Hr(),
+        html.Div(
+            [
+                html.Button(
+                    "Reset group to defaults",
+                    id="reset-color-overrides-button",
+                    style=BUTTON_STYLE,
+                ),
+                html.Button(
+                    "Apply",
+                    id="apply-color-overrides-button",
+                    style=BUTTON_STYLE,
+                ),
+            ]
+        ),
+    ],
+    id="color-picker-modal",
+    title="Customize category colors",
+    is_open=False,
+    placement="end",
+    backdrop=False,
+    scrollable=True,
+)
+
+# CUSTOM CATEGORY/GROUP CREATION
+open_custom_group_button = html.Button(
+    "+ Add Custom Group",
+    id="open-custom-group-button",
+    style=BUTTON_STYLE,
+)
+
+# dbc.Offcanvas (see color_picker_modal above for why, not dbc.Modal) - the
+# whole point of this panel is that the user lassoes points on the map/plots
+# *while* it's open, repeatedly, to build up multiple categories, so it must
+# not block interaction with the rest of the page.
+custom_group_modal = dbc.Offcanvas(
+    [
+        dcc.Input(
+            id="custom-group-name-input",
+            type="text",
+            placeholder="New group column name",
+        ),
+        html.Hr(),
+        html.P(
+            "Lasso/box-select points on the map or a biplot, then click "
+            "'Create Group From Selection' to load them below - repeat for "
+            "each category, then Finish.",
+            style={"font-size": "0.85em"},
+        ),
+        dcc.Input(
+            id="custom-group-category-name-input",
+            type="text",
+            placeholder="Category value name",
+        ),
+        dcc.Dropdown(
+            id="custom-group-assign-entity-dropdown",
+            options=[],
+            value=[],
+            multi=True,
+            style=DROPDOWN_MULTI_STYLE,
+            placeholder="Sample IDs assigned to this category (editable)",
+        ),
+        html.Button(
+            "Add/Update category",
+            id="custom-group-commit-category-button",
+            style=BUTTON_STYLE,
+        ),
+        html.Div(id="custom-group-categories-preview", children=[]),
+        html.Hr(),
+        html.Div(
+            [
+                html.Button(
+                    "Cancel",
+                    id="custom-group-cancel-button",
+                    style=BUTTON_STYLE,
+                ),
+                html.Button(
+                    "Finish & Create Group",
+                    id="custom-group-finalize-button",
+                    style=BUTTON_STYLE,
+                ),
+            ]
+        ),
+    ],
+    id="custom-group-modal",
+    title="Create custom category group",
+    is_open=False,
+    placement="end",
+    backdrop=False,
+    scrollable=True,
+)
+
 # SIDEBAR
 sidebar = html.Div(
     children=[
@@ -151,6 +279,12 @@ sidebar = html.Div(
         dropdown_plot_group_1,
         dropdown_plot_group_2,
         check_list_plot_date,
+        html.Hr(),
+        html.P("Custom categories & colors", className="lead"),
+        open_color_picker_button,
+        color_picker_modal,
+        open_custom_group_button,
+        custom_group_modal,
     ],
     id="sidebar",
     style=SIDEBAR_HIDEN,
@@ -274,7 +408,8 @@ plots_div = html.Div(
 
 action_buttons = html.Div(
     children=[
-        html.Button("Grab map select for PCA/PacMAP", id="map-selected-snapshot")
+        html.Button("Grab map select for PCA/PacMAP", id="map-selected-snapshot"),
+        html.Button("Create Group From Selection", id="create-group-from-selection-button"),
     ],
     # className="d-flex justify-content-center",
     style=BUTTON_STYLE,
@@ -367,6 +502,12 @@ def create_page_map():
             dcc.Store(
                 id="raw-upload-store"
             ),  # {content_string, columns} for the pending upload, staged until mapping is confirmed
+            dcc.Store(
+                id="custom-color-overrides", storage_type="memory"
+            ),  # mirrors session["custom_color_overrides"], cheap Input for update_map/plot_data
+            dcc.Store(
+                id="custom-group-draft", storage_type="memory"
+            ),  # {category_value: [entity_id, ...]} while custom-group-modal is open
             navbar,
             sidebar,
             floating_alert_container,

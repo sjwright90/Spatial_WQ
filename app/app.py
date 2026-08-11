@@ -1,7 +1,7 @@
 # %%
 import base64
 import io
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import dash
 from dash.dependencies import ALL, Input, Output, State
@@ -18,7 +18,12 @@ from src.data_manager import DataPreprocessor, DataPlotter, SessionManager
 from src.data_model import ROLE_REGISTRY, ColumnRole, ColumnMapping
 from src.data_mapping import ValidationIssue
 
-from src.data_process import json_to_pandas
+from src.data_process import (
+    json_to_pandas,
+    merge_color_overrides,
+    build_color_mapping_export_df,
+    build_custom_group_export_df,
+)
 
 # from src.compositional_data_functions import clr_transform_scale
 from src.dimension_reduction_functions import process_dimension_reduction
@@ -478,6 +483,147 @@ def update_dropdowns(session: Optional[str]) -> tuple:
     )
 
 
+# COLOR PICKER: open the modal, populate the group dropdown
+@app.callback(
+    Output("color-picker-group-dropdown", "options"),
+    Output("color-picker-group-dropdown", "value"),
+    Output("color-picker-modal", "is_open"),
+    Input("open-color-picker-button", "n_clicks"),
+    State("meta-data", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.color_picker", fallback=([], None, False))
+def populate_color_picker_group_dropdown(
+    n_clicks: Optional[int], meta_data: Optional[str]
+) -> Tuple[list, Optional[str], bool]:
+    """Populate the color-picker's group dropdown with every active plotting
+    group (including user-created custom groups) and open the modal."""
+    if meta_data is None:
+        raise PreventUpdate
+    meta_data = load_store(meta_data)
+    plotting_groups = meta_data["cols_key_meta"]["plotting_groups"]
+    return plotting_groups, None, True
+
+
+def _color_swatch_row(value: Any, hex_color: str) -> html.Div:
+    """One labeled `<input type="color">` row for the color-picker modal.
+    dash.html has no Input component (that's dcc.Input, which renders a real
+    `<input>` tag and does accept type="color" - html.Button/html.Span etc.
+    are the only interactive dash.html elements)."""
+    return html.Div(
+        [
+            html.Span(str(value), style={"margin-right": "8px"}),
+            dcc.Input(
+                type="color",
+                id={"type": "color-swatch-input", "value": str(value)},
+                value=hex_color,
+            ),
+        ],
+        style={"margin-bottom": "4px"},
+    )
+
+
+# COLOR PICKER: render one swatch row per category value of the selected group
+@app.callback(
+    Output("color-picker-value-list", "children"),
+    Input("color-picker-group-dropdown", "value"),
+    State("meta-data", "data"),
+    State("custom-color-overrides", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.color_picker", fallback=[])
+def populate_color_picker_value_list(
+    group_col: Optional[str], meta_data: Optional[str], custom_color_overrides: Optional[str]
+) -> list:
+    """Render a color-input row per value of the selected plotting group,
+    pre-filled with its effective (override-merged) color."""
+    if not group_col or meta_data is None:
+        return []
+    meta_data = load_store(meta_data)
+    overrides = load_store(custom_color_overrides) or {}
+    default_colors = meta_data["dict_generic_colors"].get(group_col, {})
+    effective_colors = merge_color_overrides({group_col: default_colors}, overrides)[group_col]
+    return [
+        _color_swatch_row(value, hex_color)
+        for value, hex_color in sorted(effective_colors.items(), key=lambda kv: str(kv[0]))
+    ]
+
+
+# COLOR PICKER: commit the picked hex colors into session["custom_color_overrides"]
+@app.callback(
+    Output("session", "data", allow_duplicate=True),
+    Output("custom-color-overrides", "data", allow_duplicate=True),
+    Output("color-picker-modal", "is_open", allow_duplicate=True),
+    Input("apply-color-overrides-button", "n_clicks"),
+    State("color-picker-group-dropdown", "value"),
+    State({"type": "color-swatch-input", "value": ALL}, "value"),
+    State({"type": "color-swatch-input", "value": ALL}, "id"),
+    State("session", "data"),
+    State("custom-color-overrides", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.color_picker", fallback=(dash.no_update,) * 3)
+def apply_color_overrides(
+    n_clicks: Optional[int],
+    group_col: Optional[str],
+    swatch_values: List[str],
+    swatch_ids: List[dict],
+    session: Optional[str],
+    custom_color_overrides: Optional[str],
+) -> Tuple[str, str, bool]:
+    """Write the modal's current swatch values into
+    session["custom_color_overrides"][group_col] and close the modal."""
+    if not group_col or session is None:
+        raise PreventUpdate
+    session = load_store(session)
+    overrides = load_store(custom_color_overrides) or {}
+    group_overrides = dict(overrides.get(group_col, {}))
+    for id_, hex_color in zip(swatch_ids, swatch_values):
+        group_overrides[id_["value"]] = hex_color
+    overrides[group_col] = group_overrides
+    session["custom_color_overrides"] = overrides
+    logger.info("Applied %d color override(s) for group '%s'", len(group_overrides), group_col)
+    return dump_store(session), dump_store(overrides), False
+
+
+# COLOR PICKER: reset a group's colors back to the auto-generated/predefined defaults
+@app.callback(
+    Output("session", "data", allow_duplicate=True),
+    Output("custom-color-overrides", "data", allow_duplicate=True),
+    Output("color-picker-value-list", "children", allow_duplicate=True),
+    Input("reset-color-overrides-button", "n_clicks"),
+    State("color-picker-group-dropdown", "value"),
+    State("meta-data", "data"),
+    State("session", "data"),
+    State("custom-color-overrides", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.color_picker", fallback=(dash.no_update,) * 3)
+def reset_color_overrides(
+    n_clicks: Optional[int],
+    group_col: Optional[str],
+    meta_data: Optional[str],
+    session: Optional[str],
+    custom_color_overrides: Optional[str],
+) -> Tuple[str, str, list]:
+    """Drop `group_col`'s entry from custom_color_overrides, falling back to
+    the default palette, and re-render the now-unoverridden swatch rows."""
+    if not group_col or session is None or meta_data is None:
+        raise PreventUpdate
+    session = load_store(session)
+    meta_data = load_store(meta_data)
+    overrides = load_store(custom_color_overrides) or {}
+    overrides.pop(group_col, None)
+    session["custom_color_overrides"] = overrides
+    default_colors = meta_data["dict_generic_colors"].get(group_col, {})
+    rows = [
+        _color_swatch_row(value, hex_color)
+        for value, hex_color in sorted(default_colors.items(), key=lambda kv: str(kv[0]))
+    ]
+    logger.info("Reset color overrides for group '%s'", group_col)
+    return dump_store(session), dump_store(overrides), rows
+
+
 # GENERATE THE MAP
 @app.callback(
     Output("map", "figure"),
@@ -492,7 +638,16 @@ def update_map(
     map_group: Optional[str], meta_data: Optional[str], relayoutData: Optional[dict]
 ) -> Any:
     """Rebuild the map figure for the selected plotting group, preserving the
-    user's current pan/zoom state where possible."""
+    user's current pan/zoom state where possible.
+
+    Reverted: this used to also take custom-color-overrides as an Input so
+    the map recolored instantly on Apply/Reset, but that made every color
+    change rebuild the figure on a trigger other than "map-group-dropdown",
+    which skipped the relayoutData-reapply branch below and reset the view -
+    see docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md. Color
+    overrides now apply to the map the next time it naturally rebuilds
+    (group dropdown change or new upload) instead of live.
+    """
     if meta_data is None or not map_group:
         return empty_fig()
     # find what is triggering the callback
@@ -649,6 +804,306 @@ def update_loc_id_dropdown(
     return selected_loc_ids
 
 
+def _build_entity_dropdown_options(
+    df_master: pd.DataFrame, loc_id_col: str, entity_id_col: str, date_col: Optional[str]
+) -> List[dict]:
+    """`{label: "loc_id (date)", value: entity_id}` per row - the assignment
+    dropdown's option list for the custom-group-creation modal."""
+    if date_col:
+        labels = df_master[loc_id_col].astype(str) + " (" + df_master[date_col].astype(str) + ")"
+    else:
+        labels = df_master[loc_id_col].astype(str)
+    return [
+        {"label": label, "value": entity_id}
+        for label, entity_id in zip(labels, df_master[entity_id_col])
+    ]
+
+
+def _render_custom_group_preview(draft: Dict[str, List[str]]) -> List[html.P]:
+    """`"CategoryA: 12 sample(s)"` per committed category in the draft."""
+    return [html.P(f"{name}: {len(ids)} sample(s)") for name, ids in draft.items()]
+
+
+# CUSTOM GROUP: manual entry - open the panel, list every entity ID
+@app.callback(
+    Output("custom-group-modal", "is_open", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "options"),
+    Output("custom-group-assign-entity-dropdown", "value"),
+    Output("custom-group-draft", "data"),
+    Output("custom-group-categories-preview", "children"),
+    Input("open-custom-group-button", "n_clicks"),
+    State("session", "data"),
+    State("custom-group-draft", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.custom_group", fallback=(dash.no_update,) * 5)
+def open_blank_custom_group_modal(
+    n_clicks: Optional[int], session: Optional[str], existing_draft: Optional[dict]
+) -> tuple:
+    """Open the custom-group panel with an empty pending selection.
+
+    Preserves any already-committed categories in `existing_draft` - this is
+    just "(re)open the panel", not "start over". The draft only actually
+    resets on Cancel/Finish (see cancel_custom_group_modal/
+    finalize_custom_group).
+    """
+    if session is None:
+        raise PreventUpdate
+    session = load_store(session)
+    meta_data = session["meta_data"]
+    cols_key_meta = meta_data["cols_key_meta"]
+    df_master = json_to_pandas(session, "df_master", cols_key_meta["date"])
+    options = _build_entity_dropdown_options(
+        df_master, cols_key_meta["loc_id"], cols_key_meta["entity_id"], cols_key_meta["date"]
+    )
+    draft = existing_draft or {}
+    return True, options, [], draft, _render_custom_group_preview(draft)
+
+
+# CUSTOM GROUP: pre-populate the assignment dropdown from a map/plot lasso select
+@app.callback(
+    Output("custom-group-modal", "is_open", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "options", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "value", allow_duplicate=True),
+    Output("custom-group-draft", "data", allow_duplicate=True),
+    Output("custom-group-categories-preview", "children", allow_duplicate=True),
+    Input("create-group-from-selection-button", "n_clicks"),
+    State("map", "selectedData"),
+    State("pca-plot", "selectedData"),
+    State("pmap-plot", "selectedData"),
+    State("session", "data"),
+    State("custom-group-draft", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.custom_group", fallback=(dash.no_update,) * 5)
+def populate_custom_group_from_selection(
+    n_clicks: Optional[int],
+    map_selected: Optional[dict],
+    pca_selected: Optional[dict],
+    pmap_selected: Optional[dict],
+    session: Optional[str],
+    existing_draft: Optional[dict],
+) -> tuple:
+    """Open the custom-group panel pre-populated with the union of the map's
+    and both biplots' current lasso/box selection, converted to entity IDs.
+
+    Since this panel is a non-blocking dbc.Offcanvas (not a dbc.Modal), the
+    map/plots stay interactive while it's open - the user can lasso, commit a
+    category, lasso a different set of points, click this button again to
+    load the new selection, and commit another category, repeating as many
+    times as needed. `existing_draft` (already-committed categories) is
+    preserved across every call - only the pending (uncommitted) selection in
+    the dropdown is replaced.
+
+    Map selections carry only `loc_id` in `customdata` (see `update_map`), so
+    they're expanded to every entity_id at that location - i.e. every sample
+    date at each selected site, not just the specific point clicked.
+    """
+    if session is None:
+        raise PreventUpdate
+    session = load_store(session)
+    meta_data = session["meta_data"]
+    cols_key_meta = meta_data["cols_key_meta"]
+    loc_id_col = cols_key_meta["loc_id"]
+    entity_id_col = cols_key_meta["entity_id"]
+    date_col = cols_key_meta["date"]
+    df_master = json_to_pandas(session, "df_master", date_col)
+
+    selected_entity_ids: List[str] = []
+    if map_selected:
+        selected_loc_ids = [
+            point["customdata"][0] for point in map_selected.get("points", []) if point.get("customdata")
+        ]
+        if selected_loc_ids:
+            # loc_id is coerced to string at ingestion (DataPreprocessor), but
+            # a JSON round-trip through the session/dcc.Store can let pandas'
+            # dtype inference turn a numeric-looking loc_id column back into
+            # int64 (see data_manager.py's astype(str) comment) - compare as
+            # strings on both sides so a numeric loc_id in customdata still
+            # matches.
+            selected_loc_ids_str = {str(v) for v in selected_loc_ids}
+            selected_entity_ids.extend(
+                df_master[df_master[loc_id_col].astype(str).isin(selected_loc_ids_str)][
+                    entity_id_col
+                ].tolist()
+            )
+    for plot_selected in (pca_selected, pmap_selected):
+        if plot_selected:
+            selected_entity_ids.extend(
+                point["customdata"][1]
+                for point in plot_selected.get("points", [])
+                if point.get("customdata") and len(point["customdata"]) > 1
+            )
+
+    # de-dupe, preserve order
+    selected_entity_ids = list(dict.fromkeys(selected_entity_ids))
+
+    options = _build_entity_dropdown_options(df_master, loc_id_col, entity_id_col, date_col)
+    draft = existing_draft or {}
+    return True, options, selected_entity_ids, draft, _render_custom_group_preview(draft)
+
+
+# CUSTOM GROUP: commit a category name + its entity-ID selection into the draft
+@app.callback(
+    Output("custom-group-draft", "data", allow_duplicate=True),
+    Output("custom-group-categories-preview", "children", allow_duplicate=True),
+    Output("custom-group-category-name-input", "value", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "value", allow_duplicate=True),
+    Input("custom-group-commit-category-button", "n_clicks"),
+    State("custom-group-category-name-input", "value"),
+    State("custom-group-assign-entity-dropdown", "value"),
+    State("custom-group-draft", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.custom_group", fallback=(dash.no_update,) * 4)
+def commit_category_to_draft(
+    n_clicks: Optional[int],
+    category_name: Optional[str],
+    entity_ids: Optional[List[str]],
+    draft: Optional[dict],
+) -> Tuple[dict, list, None, list]:
+    """Add/overwrite one category in the in-progress draft and clear the
+    category-name/selection inputs so the user can add another."""
+    if not category_name or not category_name.strip() or not entity_ids:
+        raise PreventUpdate
+    draft = draft or {}
+    draft[category_name] = entity_ids
+    return draft, _render_custom_group_preview(draft), None, []
+
+
+# CUSTOM GROUP: finalize - create the column and assign every committed category
+@app.callback(
+    Output("session", "data", allow_duplicate=True),
+    Output("meta-data", "data", allow_duplicate=True),
+    Output("custom-group-modal", "is_open", allow_duplicate=True),
+    Output("custom-group-draft", "data", allow_duplicate=True),
+    Output("global-alert-container", "children", allow_duplicate=True),
+    Input("custom-group-finalize-button", "n_clicks"),
+    State("custom-group-name-input", "value"),
+    State("custom-group-draft", "data"),
+    State("session", "data"),
+    prevent_initial_call=True,
+)
+@log_and_surface_error(
+    "app.callbacks.custom_group",
+    error_output_index=4,
+    fallback=(dash.no_update, dash.no_update, dash.no_update, dash.no_update),
+)
+def finalize_custom_group(
+    n_clicks: Optional[int],
+    new_col_name: Optional[str],
+    draft: Optional[dict],
+    session: Optional[str],
+) -> Tuple[str, str, bool, dict, Any]:
+    """Create the new group column from the draft's categories and populate
+    every downstream dropdown/color dict with it."""
+    if not new_col_name or not new_col_name.strip():
+        return (
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dbc.Alert("Custom group name cannot be empty.", color="danger", dismissable=True),
+        )
+    if not draft:
+        return (
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dbc.Alert(
+                "Add at least one category before creating the group.",
+                color="danger",
+                dismissable=True,
+            ),
+        )
+
+    session = load_store(session)
+    session = SessionManager.add_custom_group(session, new_col_name.strip(), draft)
+    alert = dbc.Alert(
+        f"✅ Custom group '{new_col_name}' created. Click 'Apply' to include it in "
+        "PCA/PaCMAP plots.",
+        color="success",
+        dismissable=True,
+        duration=10000,
+    )
+    return dump_store(session), dump_store(session["meta_data"]), False, {}, alert
+
+
+# CUSTOM GROUP: cancel out of the modal without creating anything
+@app.callback(
+    Output("custom-group-modal", "is_open", allow_duplicate=True),
+    Output("custom-group-draft", "data", allow_duplicate=True),
+    Input("custom-group-cancel-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.custom_group", fallback=(dash.no_update,) * 2)
+def cancel_custom_group_modal(n_clicks: Optional[int]) -> Tuple[bool, dict]:
+    """Close the custom-group modal and discard its in-progress draft."""
+    return False, {}
+
+
+# EXPORT: color mapping CSV (ENTITY_ID -> CATEGORY_COL -> CATEGORY_VALUE -> CATEGORY_COLOR)
+@app.callback(
+    Output("download-color-mapping-csv", "data"),
+    Input("download-color-mapping-button", "n_clicks"),
+    State("session", "data"),
+    State("custom-color-overrides", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.export")
+def download_color_mapping_csv(
+    n_clicks: Optional[int], session: Optional[str], custom_color_overrides: Optional[str]
+) -> Any:
+    """Export every row's effective (override-merged) color per plotting group."""
+    if session is None:
+        return dash.no_update
+    session = load_store(session)
+    meta_data = session["meta_data"]
+    overrides = load_store(custom_color_overrides) or {}
+    effective_colors = merge_color_overrides(meta_data["dict_generic_colors"], overrides)
+    df_master = json_to_pandas(session, "df_master", meta_data["cols_key_meta"]["date"])
+    df_export = build_color_mapping_export_df(
+        df_master,
+        meta_data["cols_key_meta"]["plotting_groups"],
+        meta_data["cols_key_meta"]["entity_id"],
+        effective_colors,
+    )
+    logger.info("Downloading color mapping CSV (%d rows)", len(df_export))
+    return dcc.send_data_frame(df_export.to_csv, "color_mapping.csv", index=False)
+
+
+# EXPORT: custom group assignment CSV (ENTITY_ID -> LOCATION_ID -> DATE -> [custom columns...])
+@app.callback(
+    Output("download-custom-groups-csv", "data"),
+    Input("download-custom-groups-button", "n_clicks"),
+    State("session", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.export")
+def download_custom_groups_csv(n_clicks: Optional[int], session: Optional[str]) -> Any:
+    """Export the ENTITY_ID -> LOCATION_ID -> DATE -> custom-group-columns lookup."""
+    if session is None:
+        return dash.no_update
+    session = load_store(session)
+    meta_data = session["meta_data"]
+    custom_group_columns = meta_data.get("custom_group_columns", [])
+    if not custom_group_columns:
+        logger.warning("Download custom groups CSV requested but no custom groups exist yet.")
+        return dash.no_update
+    cols_key_meta = meta_data["cols_key_meta"]
+    df_master = json_to_pandas(session, "df_master", cols_key_meta["date"])
+    df_export = build_custom_group_export_df(
+        df_master,
+        cols_key_meta["entity_id"],
+        cols_key_meta["loc_id"],
+        cols_key_meta["date"],
+        custom_group_columns,
+    )
+    logger.info("Downloading custom groups CSV (%d rows)", len(df_export))
+    return dcc.send_data_frame(df_export.to_csv, "custom_groups.csv", index=False)
+
+
 # plotting callbacks
 @app.callback(
     [
@@ -661,6 +1116,7 @@ def update_loc_id_dropdown(
         Input("plot-group-dropdown-1", "value"),
         Input("plot-group-dropdown-2", "value"),
         Input("date-range-slider", "value"),
+        Input("custom-color-overrides", "data"),
     ],
     [
         State(component_id="meta-data", component_property="data"),
@@ -675,12 +1131,21 @@ def plot_data(
     plot_group_1: Optional[str],
     plot_group_2: Optional[str],
     date_range: Optional[List[int]],
+    custom_color_overrides: Optional[str],
     meta_data: Optional[str],
     n_neighbors: Optional[int],
 ) -> Tuple[Any, Any]:
     """Rebuild the PCA and PaCMAP biplots from the current working data/selection."""
     if working_data is None:
         return DataPlotter.empty_figs()
+
+    overrides = load_store(custom_color_overrides) or {}
+    if overrides and meta_data is not None:
+        meta_data_loaded = load_store(meta_data)
+        meta_data_loaded["dict_generic_colors"] = merge_color_overrides(
+            meta_data_loaded["dict_generic_colors"], overrides
+        )
+        meta_data = dump_store(meta_data_loaded)
 
     data_plotter = DataPlotter(
         working_data,

@@ -6,6 +6,10 @@
 # make_color_dict
 # find_make_color_dict
 # make_plotting_group_color_dicts
+# merge_color_overrides
+# assign_custom_group_column
+# build_color_mapping_export_df
+# build_custom_group_export_df
 # extract_coordinate_dataframe
 # subset_df_locIds
 # subset_df_numericFeatures
@@ -21,15 +25,22 @@
 # data_mapping.py (per-row errors="coerce" + structured warnings, replacing
 # the old whole-column datetime.now() fallback that used to live here).
 from typing import Any, Dict, List, Optional, Tuple
-from pandas import DataFrame, read_json, to_datetime
+from pandas import DataFrame, concat, read_json, to_datetime
 import io
 
 # import 'alphabet' from plotly
 import plotly.colors as pc
 
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
 DISCRETE_COLOR_LIST = pc.qualitative.Alphabet
 
 DEFAULT_MAP_MARKER_SIZE = 10
+
+DEFAULT_CATEGORY_COLOR = "#808080"  # matches plotting._DEFAULT_COLOR
+DEFAULT_UNASSIGNED_CATEGORY = "Unassigned"
 
 
 def df_col_group_to_dict(df: DataFrame, col_key: str, col_value: str) -> Dict[Any, Any]:
@@ -139,6 +150,217 @@ def make_plotting_group_color_dicts(
     for col in cols_plot_groups:
         _dict_col_colors[col] = find_make_color_dict(df, col, group_colors.get(col))
     return _dict_col_colors
+
+
+def merge_color_overrides(
+    dict_generic_colors: Dict[str, Dict[Any, str]],
+    custom_color_overrides: Optional[Dict[str, Dict[str, str]]],
+) -> Dict[str, Dict[Any, str]]:
+    """
+    Non-destructively overlay user-picked colors on top of the default
+    per-group color dicts (`meta_data["dict_generic_colors"]`).
+
+    Never mutates `dict_generic_colors` or its nested dicts - returns a new
+    dict, so the default palette stays intact and a group/value can always be
+    reset back to it. Override keys are matched against the (possibly
+    non-string, e.g. numeric) original group values via `str()`, since
+    override keys round-trip through a dcc.Store/dropdown as strings.
+
+    Parameters
+    ----------
+    dict_generic_colors : dict
+        `{group_col: {value: hex_color}}`, the auto-generated/predefined
+        default color dicts.
+    custom_color_overrides : dict, optional
+        `{group_col: {str(value): hex_color}}`, user overrides
+        (`session["custom_color_overrides"]`). Groups/values absent here pass
+        through unchanged.
+
+    Returns
+    -------
+    dict
+        `{group_col: {value: hex_color}}` with overrides applied.
+    """
+    if not custom_color_overrides:
+        return dict_generic_colors
+
+    merged: Dict[str, Dict[Any, str]] = {}
+    for group_col, color_dict in dict_generic_colors.items():
+        overrides = custom_color_overrides.get(group_col)
+        if not overrides:
+            merged[group_col] = color_dict
+            continue
+        _merged_group = dict(color_dict)
+        _str_to_key = {str(value): value for value in color_dict}
+        for str_value, hex_color in overrides.items():
+            key = _str_to_key.get(str_value, str_value)
+            _merged_group[key] = hex_color
+        merged[group_col] = _merged_group
+    return merged
+
+
+def assign_custom_group_column(
+    df_master: DataFrame,
+    col_entity_id: str,
+    new_col_name: str,
+    assignments: Dict[str, List[str]],
+    default_value: str = DEFAULT_UNASSIGNED_CATEGORY,
+) -> DataFrame:
+    """
+    Add a new user-defined categorical column to `df_master`, assigning each
+    row a category value based on its `col_entity_id` membership in
+    `assignments`.
+
+    Parameters
+    ----------
+    df_master : pandas DataFrame
+        The master dataframe to extend. Not mutated - a copy is returned.
+    col_entity_id : str
+        Name of the composite entity-ID column (`ENTITY_ID`) used to identify
+        rows.
+    new_col_name : str
+        Name of the new column to add.
+    assignments : dict
+        `{category_value: [entity_id, ...]}` - the rows to assign to each
+        category. Every `entity_id` must be present in
+        `df_master[col_entity_id]`.
+    default_value : str, default "Unassigned"
+        Category value for rows not covered by `assignments`.
+
+    Returns
+    -------
+    pandas DataFrame
+        Copy of `df_master` with `new_col_name` added.
+
+    Raises
+    ------
+    ValueError
+        If `assignments` references an `entity_id` not present in
+        `df_master[col_entity_id]`.
+    """
+    known_entity_ids = set(df_master[col_entity_id])
+    unknown_ids = set()
+    for entity_ids in assignments.values():
+        unknown_ids.update(set(entity_ids) - known_entity_ids)
+    if unknown_ids:
+        raise ValueError(
+            f"assignments reference entity_id(s) not present in df_master: {sorted(unknown_ids)}"
+        )
+
+    df_master = df_master.copy()
+    df_master[new_col_name] = default_value
+
+    reassigned_count = 0
+    already_assigned: Dict[str, str] = {}
+    for category_value, entity_ids in assignments.items():
+        for entity_id in entity_ids:
+            if entity_id in already_assigned:
+                reassigned_count += 1
+            already_assigned[entity_id] = category_value
+        df_master.loc[df_master[col_entity_id].isin(entity_ids), new_col_name] = category_value
+
+    if reassigned_count:
+        logger.warning(
+            "assign_custom_group_column: %d entity_id(s) appeared in more than one "
+            "category for '%s' - later category in `assignments` wins.",
+            reassigned_count,
+            new_col_name,
+        )
+
+    return df_master
+
+
+def build_color_mapping_export_df(
+    df_master: DataFrame,
+    plotting_groups: List[str],
+    col_entity_id: str,
+    effective_colors: Dict[str, Dict[Any, str]],
+    default_color: str = DEFAULT_CATEGORY_COLOR,
+) -> DataFrame:
+    """
+    Build a long-format export of every row's effective color per plotting
+    group: `ENTITY_ID`, `CATEGORY_COL`, `CATEGORY_VALUE`, `CATEGORY_COLOR`.
+
+    Parameters
+    ----------
+    df_master : pandas DataFrame
+        The master dataframe.
+    plotting_groups : list
+        Plotting-group column names to include.
+    col_entity_id : str
+        Name of the composite entity-ID column (`ENTITY_ID`).
+    effective_colors : dict
+        `{group_col: {value: hex_color}}`, typically the output of
+        `merge_color_overrides`.
+    default_color : str
+        Fallback hex color for a value with no entry in `effective_colors`.
+
+    Returns
+    -------
+    pandas DataFrame
+        Columns: `ENTITY_ID`, `CATEGORY_COL`, `CATEGORY_VALUE`, `CATEGORY_COLOR`.
+    """
+    frames = []
+    for group_col in plotting_groups:
+        color_dict = effective_colors.get(group_col, {})
+        _df = df_master[[col_entity_id, group_col]].copy()
+        _df.columns = ["ENTITY_ID", "CATEGORY_VALUE"]
+        _df["CATEGORY_COL"] = group_col
+        _df["CATEGORY_COLOR"] = _df["CATEGORY_VALUE"].map(
+            lambda value: color_dict.get(value, default_color)
+        )
+        frames.append(_df[["ENTITY_ID", "CATEGORY_COL", "CATEGORY_VALUE", "CATEGORY_COLOR"]])
+
+    if not frames:
+        return DataFrame(columns=["ENTITY_ID", "CATEGORY_COL", "CATEGORY_VALUE", "CATEGORY_COLOR"])
+
+    return concat(frames, ignore_index=True)
+
+
+def build_custom_group_export_df(
+    df_master: DataFrame,
+    col_entity_id: str,
+    col_loc_id: str,
+    col_date: Optional[str],
+    custom_group_columns: List[str],
+) -> DataFrame:
+    """
+    Build a lookup export of `ENTITY_ID -> LOCATION_ID -> DATE -> [custom
+    category columns...]`.
+
+    Parameters
+    ----------
+    df_master : pandas DataFrame
+        The master dataframe.
+    col_entity_id, col_loc_id : str
+        Names of the composite entity-ID and location-ID columns.
+    col_date : str, optional
+        Name of the mapped date column, if any. Omitted from the export if
+        None.
+    custom_group_columns : list
+        Names of user-created custom group columns to include. If empty, an
+        empty-with-headers frame is returned.
+
+    Returns
+    -------
+    pandas DataFrame
+        Columns: `ENTITY_ID`, `LOCATION_ID`, `DATE` (if `col_date` given),
+        followed by `custom_group_columns`.
+    """
+    _cols_source = [col_entity_id, col_loc_id]
+    _cols_export = ["ENTITY_ID", "LOCATION_ID"]
+    if col_date:
+        _cols_source.append(col_date)
+        _cols_export.append("DATE")
+    _cols_source += custom_group_columns
+    _cols_export += custom_group_columns
+
+    if not custom_group_columns:
+        return DataFrame(columns=_cols_export)
+
+    df_export = df_master[_cols_source].copy()
+    df_export.columns = _cols_export
+    return df_export
 
 
 def extract_coordinate_dataframe(
