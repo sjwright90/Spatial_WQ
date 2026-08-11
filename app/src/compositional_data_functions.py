@@ -34,7 +34,10 @@ def clr_transform(X: np.ndarray) -> np.ndarray:
     np.ndarray
         Transformed data.
     """
-    # check missing values
+    # Copy before mutating - previously `X[X == 0.0] = np.nan` mutated the
+    # caller's array in place before this validity check, so a caught
+    # ValueError still left the caller holding a corrupted array.
+    X = X.copy()
     X[X == 0.0] = np.nan
     if array_anynull(X):
         raise ValueError(

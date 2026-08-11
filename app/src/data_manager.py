@@ -1,170 +1,156 @@
-from .plotting import make_fig_pca, make_fig_pmap, empty_fig
+from .plotting import make_fig_pca, make_fig_pmap, empty_fig, PlotContext
 from .data_process import (
-    get_key_cols_plot,
-    set_key_col_date,
     df_col_group_to_dict,
-    get_key_cols_meta,
     make_plotting_group_color_dicts,
-    rename_cols_plot_groups,
     extract_coordinate_dataframe,
-    rename_cols_analyte,
     subset_df_locIds,
     pandas_to_json,
     json_to_pandas,
 )
+from .data_model import ColumnMapping
+from .data_mapping import build_mapped_dataset
 
 from .cache_initialize import generate_df_hash_version
+from .logging_config import get_logger
 
 import pandas as pd
 
 import base64
 import io
 import json
-import re
+from typing import Any, Dict, List, Optional, Tuple
 
-from datetime import datetime
+logger = get_logger(__name__)
+
+DEFAULT_MARKER_SYMBOL = "circle"
 
 
-# TODO: make date parsing more 'generous'
+def _require(mapping: Dict[str, Any], key: str, context: str) -> Any:
+    """Look up `key` in `mapping` (a cols_key_meta/cols_key_plot/meta_data
+    dict), raising a clear, diagnostic KeyError instead of the bare one dict
+    indexing gives. These dicts round-trip through JSON/dcc.Store/Redis, so a
+    missing key usually means a stale/incompatible session blob (e.g. from an
+    older app version) rather than a local bug - `context` names which dict,
+    so the error is actionable."""
+    try:
+        return mapping[key]
+    except KeyError:
+        logger.error("Missing expected key '%s' in %s", key, context)
+        raise KeyError(
+            f"'{key}' missing from {context} - the session data may be from an "
+            "incompatible/older version of the app."
+        ) from None
+
+
 class DataPreprocessor:
-    def __init__(self, content_string):
-        decoded = base64.b64decode(content_string)
+    """Ingests a raw uploaded CSV plus a user-supplied ColumnMapping (see
+    data_model.py) and builds the internal structures the rest of the app
+    consumes. Column classification is driven entirely by `mapping` -
+    see data_mapping.build_mapped_dataset for validation/coercion details.
 
-        self.df_master = pd.read_csv(io.BytesIO(decoded), float_precision="high")
-        # get hash of content
-        self.content_hash = generate_df_hash_version(self.df_master)
+    If the mapping fails validation, `self.validation.has_errors` is True and
+    every other data attribute (`df_master`, `cols_key_plot`, `cols_key_meta`,
+    `df_coordinate`, `dict_marker_map`, `dict_generic_colors`, `loc_id_all`,
+    `cols_numeric_all`) is left as None - callers must check
+    `self.validation.has_errors` before calling `get_session_dict()`.
+    """
 
-        self.cols_key_plot = dict(
-            zip(
-                ["meta", "numeric_all", "numeric_simple", "numeric_clr"],
-                get_key_cols_plot(self.df_master),
-            )
+    def __init__(self, content_string: str, mapping: ColumnMapping) -> None:
+        try:
+            decoded = base64.b64decode(content_string)
+            df_raw = pd.read_csv(io.BytesIO(decoded), float_precision="high")
+            self.content_hash = generate_df_hash_version(df_raw)
+        except Exception:
+            logger.exception("Failed to decode/parse uploaded CSV content")
+            raise
+
+        mapped = build_mapped_dataset(df_raw, mapping)
+        self.validation = mapped.validation
+
+        self.df_master = None
+        self.cols_key_plot = None
+        self.cols_key_meta = None
+        self.df_coordinate = None
+        self.dict_marker_map = None
+        self.dict_generic_colors = None
+        self.loc_id_all = None
+        self.cols_numeric_all = None
+
+        if self.validation.has_errors:
+            return
+
+        self.df_master = mapped.df_master
+        self.cols_key_plot = mapped.cols_key_plot
+        self.cols_key_meta = mapped.cols_key_meta
+
+        plotting_groups = _require(self.cols_key_meta, "plotting_groups", "cols_key_meta")
+        loc_id = _require(self.cols_key_meta, "loc_id", "cols_key_meta")
+        long_lat = _require(self.cols_key_meta, "long_lat", "cols_key_meta")
+
+        # Coerce loc_id to string here, once, at the source - every downstream
+        # consumer (loc_id_all, dict_marker_map, df_coordinate, the PCA/PaCMAP
+        # output columns, and plotting.py's df.groupby(col_loc_id)) derives
+        # from this column, so a single cast here keeps the dtype consistent
+        # through the whole pipeline instead of drifting after a JSON round-
+        # trip (JSON object keys are always strings, but JSON array/column
+        # values preserve numeric dtype - without this, a numeric loc_id used
+        # to desync dict_marker_map's string keys from the dataframe's numeric
+        # values after a dcc.Store round-trip).
+        self.df_master[loc_id] = self.df_master[loc_id].astype(str)
+
+        self.df_master = self.df_master.sort_values(by=[*plotting_groups, loc_id]).reset_index(
+            drop=True
         )
-        self.df_master, cols_key_plot_new = rename_cols_analyte(
-            self.df_master,
-            self.cols_key_plot["numeric_all"],
-            self.cols_key_plot["numeric_simple"],
-            self.cols_key_plot["numeric_clr"],
-        )
-        self.cols_key_plot["numeric_all"] = cols_key_plot_new[0]
-        self.cols_key_plot["numeric_simple"] = cols_key_plot_new[1]
-        self.cols_key_plot["numeric_clr"] = cols_key_plot_new[2]
-        self.cols_key_meta = dict(
-            zip(
-                [
-                    "loc_id",
-                    "date",
-                    "plotting_groups",
-                    "long_lat",
-                ],
-                get_key_cols_meta(self.df_master),
-            )
-        )
-        # for backwards compatibility, if plotting_groups is empty
-        # we will do a search on the old regex
-        bn_label_format_new = True
-        if len(self.cols_key_meta["plotting_groups"]) == 0:
-            print("Old 'LABELS' format detected for plot groups.")
-            cols_plot_groups = self.df_master.filter(
-                regex=r"^PLOTTING-GROUPS-DOMAIN-[0-9]{1,2}_LABELS$"
-            ).columns.to_list()
-            self.cols_key_meta["plotting_groups"] = cols_plot_groups
-            bn_label_format_new = False
-        else:
-            self.df_master, new_plotting_groups, self.cols_key_plot["meta"] = (
-                rename_cols_plot_groups(
-                    self.df_master,
-                    self.cols_key_meta["plotting_groups"],
-                    self.cols_key_plot["meta"],
-                )
-            )
-            self.cols_key_meta["plotting_groups"] = new_plotting_groups
-
-        self.df_master = set_key_col_date(
-            self.df_master,
-            self.cols_key_meta["date"],
-        )
-
-        self.df_master = self.df_master[
-            self.cols_key_plot["meta"] + self.cols_key_plot["numeric_all"]
-        ].copy()
-
-        self.df_master = self.df_master.sort_values(
-            by=[
-                *self.cols_key_meta["plotting_groups"],
-                self.cols_key_meta["loc_id"],
-            ]
-        ).reset_index(drop=True)
 
         self.df_coordinate = extract_coordinate_dataframe(
             self.df_master,
-            self.cols_key_meta["plotting_groups"],
-            self.cols_key_meta["loc_id"],
-            self.cols_key_meta["long_lat"][0],
-            self.cols_key_meta["long_lat"][1],
+            plotting_groups,
+            loc_id,
+            long_lat[0],
+            long_lat[1],
+            col_marker_size=_require(self.cols_key_meta, "map_marker_size", "cols_key_meta"),
         )
 
-        self.dict_marker_map = df_col_group_to_dict(
-            self.df_master,
-            self.cols_key_meta["loc_id"],
-            "MARKERS-PLOT-DOMAIN",
-        )
+        self.loc_id_all = self.df_master[loc_id].unique().tolist()
+
+        # dict_marker_map is keyed by loc_id, which is now always string (see
+        # the astype(str) cast above), so its keys stay consistent with
+        # plotting.py's df.groupby(col_loc_id) after a JSON round-trip.
+        # dict_generic_colors, in contrast, is keyed by plotting-group values,
+        # which are NOT coerced to string - a numeric plotting-group column
+        # could still hit the same JSON-round-trip key-type mismatch;
+        # plotting.py's fallback-on-miss (default color + logged warning)
+        # covers that remaining case, since coercing arbitrary group values
+        # (not just the one loc_id column) is a larger, unrequested change.
+        marker_symbol = _require(self.cols_key_meta, "marker_symbol", "cols_key_meta")
+        if marker_symbol:
+            self.dict_marker_map = df_col_group_to_dict(
+                self.df_master,
+                loc_id,
+                marker_symbol,
+            )
+        else:
+            # No marker-symbol role mapped - fill every location with a
+            # constant default so plotting.py's direct dict indexing
+            # (name_marker_map[loc_code]) never KeyErrors.
+            self.dict_marker_map = {loc: DEFAULT_MARKER_SYMBOL for loc in self.loc_id_all}
 
         self.dict_generic_colors = make_plotting_group_color_dicts(
             self.df_master,
-            self.cols_key_meta["plotting_groups"],
-            new_format=bn_label_format_new,  # this is for backwards compatibility, will remove in future versions
+            plotting_groups,
+            group_colors=mapping.group_colors,
         )
 
-        self.loc_id_all = self.df_master[self.cols_key_meta["loc_id"]].unique().tolist()
-        self.cols_numeric_all = self.cols_key_plot["numeric_all"]
+        self.cols_numeric_all = _require(self.cols_key_plot, "numeric_all", "cols_key_plot")
 
-    def check_lat_lon(self):
-        col_long = self.cols_key_meta["long_lat"][0]
-        col_lat = self.cols_key_meta["long_lat"][1]
-        bad_long = self.df_master[col_long].isna() | (
-            self.df_master[col_long].abs().gt(180)
-        )
-        bad_lat = self.df_master[col_lat].isna() | (
-            self.df_master[col_lat].abs().gt(90)
-        )
-        return (bad_long | bad_lat).any()
-
-    def check_numeric_no_nan(self):
-        return self.df_master[self.cols_key_plot["numeric_all"]].isna().any().any()
-
-    def check_clr_columns_positive(self):
-        return self.df_master[self.cols_key_plot["numeric_clr"]].le(0).any().any()
-
-    def check_color_columns(self):
-        color_cols = self.df_master.filter(
-            regex=r"COLORS"
-        ).columns  # for backwards compatibility just look for COLORS in the column names
-        hex_pattern = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-        def is_valid_hex(s):
-            return bool(hex_pattern.fullmatch(str(s)))
-
-        invalids = set()
-        for col in color_cols:
-            invalid_uniques = self.df_master[~self.df_master[col].map(is_valid_hex)][
-                col
-            ].unique()
-            if len(invalid_uniques) > 0:
-                invalids.update(invalid_uniques)
-        return invalids
-
-    def run_all_checks(self):
-        results = {}
-        results["lat_lon_check"] = self.check_lat_lon()
-        results["numeric_no_nan_check"] = self.check_numeric_no_nan()
-        results["clr_columns_positive_check"] = self.check_clr_columns_positive()
-        results["color_columns_check"] = self.check_color_columns()
-        return results
-
-    def get_session_dict(self):
+    def get_session_dict(self) -> Dict[str, Any]:
+        """Package this preprocessor's state into the JSON-serializable dict
+        shape every dcc.Store/Redis session blob uses."""
+        date_col = _require(self.cols_key_meta, "date", "cols_key_meta")
+        plotting_groups = _require(self.cols_key_meta, "plotting_groups", "cols_key_meta")
+        numeric_all = _require(self.cols_key_plot, "numeric_all", "cols_key_plot")
         return {
-            "df_master": pandas_to_json(self.df_master, self.cols_key_meta["date"]),
+            "df_master": pandas_to_json(self.df_master, date_col),
             "meta_data": {
                 "cols_key_plot": self.cols_key_plot,
                 "cols_key_meta": self.cols_key_meta,
@@ -179,16 +165,16 @@ class DataPreprocessor:
             },
             "working_data": None,  # Placeholder for working data
             "plotting_data": {
-                "feature_selection_dropdown_options": self.cols_key_plot["numeric_all"],
-                "feature_selection_dropdown_value": self.cols_key_plot["numeric_all"],
+                "feature_selection_dropdown_options": numeric_all,
+                "feature_selection_dropdown_value": numeric_all,
                 "loc_id_dropdown_options": self.loc_id_all,
                 "loc_id_dropdown_value": self.loc_id_all,
-                "map_group_dropdown_options": self.cols_key_meta["plotting_groups"],
-                "map_group_dropdown_value": self.cols_key_meta["plotting_groups"][0],
-                "plot_group_dropdown_1_options": self.cols_key_meta["plotting_groups"],
-                "plot_group_dropdown_1_value": self.cols_key_meta["plotting_groups"][0],
-                "plot_group_dropdown_2_options": self.cols_key_meta["plotting_groups"],
-                "plot_group_dropdown_2_value": self.cols_key_meta["plotting_groups"][0],
+                "map_group_dropdown_options": plotting_groups,
+                "map_group_dropdown_value": plotting_groups[0],
+                "plot_group_dropdown_1_options": plotting_groups,
+                "plot_group_dropdown_1_value": plotting_groups[0],
+                "plot_group_dropdown_2_options": plotting_groups,
+                "plot_group_dropdown_2_value": plotting_groups[0],
                 "pmap_neighbors": 15,  # Default value for neighbors in pmap
             },
             "version": 1,
@@ -196,14 +182,17 @@ class DataPreprocessor:
 
 
 class DataPlotter:
+    """Deserializes a session's `working_data`/`meta_data` dcc.Store payloads
+    and renders the PCA/PaCMAP biplot figures from them."""
+
     def __init__(
         self,
-        working_data,
-        meta_data,
-        selected_loc_ids,
-        plot_groups,
-        date_range,
-    ):
+        working_data: str,
+        meta_data: str,
+        selected_loc_ids: Optional[dict],
+        plot_groups: List[str],
+        date_range: List[int],
+    ) -> None:
         self.initialize_data(
             working_data,
             meta_data,
@@ -214,124 +203,152 @@ class DataPlotter:
 
     def initialize_data(
         self,
-        working_data,
-        meta_data,
-        selected_loc_ids,
-        plot_groups,
-        date_range,
-    ):
+        working_data: str,
+        meta_data: str,
+        selected_loc_ids: Optional[dict],
+        plot_groups: List[str],
+        date_range: List[int],
+    ) -> None:
+        """Parse the JSON store payloads and build df_plot_pca/df_plot_pmap.
+        Logs and re-raises the original exception (preserving its type/
+        traceback) on any failure, rather than masking it behind a generic
+        ValueError."""
         try:
             self.working_data = json.loads(working_data)
             self.meta_data = json.loads(meta_data)
-            self.cols_key_plot = self.meta_data["cols_key_plot"]
-            self.cols_key_meta = self.meta_data["cols_key_meta"]
-            self.dict_marker_map = self.meta_data["dict_marker_map"]
+            self.cols_key_plot = _require(self.meta_data, "cols_key_plot", "meta_data")
+            self.cols_key_meta = _require(self.meta_data, "cols_key_meta", "meta_data")
+            self.dict_marker_map = _require(self.meta_data, "dict_marker_map", "meta_data")
             self.load_dataframes(selected_loc_ids)
             self.df_between_dates(date_range)
             self.ldg_df = pd.read_json(io.StringIO(self.working_data["ldg_df"]))
             self.expl_var = self.working_data["expl_var"]
             self.plot_groups = plot_groups
-        except Exception as e:
-            print(f"Error in initialize_data: {e}")
-            raise ValueError("Error initializing data") from e
+        except Exception:
+            logger.exception("Error initializing DataPlotter")
+            raise
 
-    def load_dataframes(self, selected_loc_ids):
-        self.df_plot_pca = json_to_pandas(
-            self.working_data, "df_plot_pca", self.meta_data["cols_key_meta"]["date"]
-        )
-        self.df_plot_pmap = json_to_pandas(
-            self.working_data, "df_plot_pmap", self.meta_data["cols_key_meta"]["date"]
-        )
+    def load_dataframes(self, selected_loc_ids: Optional[dict]) -> None:
+        """Build df_plot_pca/df_plot_pmap, optionally subset to the map's
+        current selection (selected_loc_ids, a Plotly selectedData dict)."""
+        date_col = _require(self.cols_key_meta, "date", "cols_key_meta")
+        self.df_plot_pca = json_to_pandas(self.working_data, "df_plot_pca", date_col)
+        self.df_plot_pmap = json_to_pandas(self.working_data, "df_plot_pmap", date_col)
         if selected_loc_ids is not None:
-            self.selected_loc_ids = [
-                point["customdata"][0] for point in selected_loc_ids["points"]
-            ]
+            self.selected_loc_ids = [point["customdata"][0] for point in selected_loc_ids["points"]]
             self.df_plot_pca = self._subset_df_locIds(self.df_plot_pca)
             self.df_plot_pmap = self._subset_df_locIds(self.df_plot_pmap)
         else:
-            self.selected_loc_ids = self.meta_data["loc_id_all"]
+            self.selected_loc_ids = _require(self.meta_data, "loc_id_all", "meta_data")
 
-    def df_between_dates(self, date_range):
-        assert self.df_plot_pca.index.equals(self.df_plot_pmap.index)
-        _series_years = self.df_plot_pca[self.cols_key_meta["date"]].dt.year
+    def df_between_dates(self, date_range: List[int]) -> None:
+        """Filter df_plot_pca/df_plot_pmap to rows within `date_range` (years),
+        a no-op when no date column is mapped."""
+        if not self.df_plot_pca.index.equals(self.df_plot_pmap.index):
+            # Asserts are stripped under `python -O`; this invariant must hold
+            # regardless of optimization flags, so raise explicitly instead.
+            raise ValueError(
+                "PCA and PaCMAP dataframe indices are out of sync "
+                f"({len(self.df_plot_pca)} vs {len(self.df_plot_pmap)} rows) - "
+                "cannot align them for date-range filtering."
+            )
+        col_date = _require(self.cols_key_meta, "date", "cols_key_meta")
+        if not col_date:
+            # No date column mapped - date-range filtering is disabled, keep
+            # all rows.
+            return
+        _series_years = self.df_plot_pca[col_date].dt.year
         _idx_between_dates = self.df_plot_pca[
             (_series_years >= date_range[0]) & (_series_years <= date_range[1])
         ].index
         self.df_plot_pca = self.df_plot_pca.loc[_idx_between_dates].copy()
         self.df_plot_pmap = self.df_plot_pmap.loc[_idx_between_dates].copy()
 
-    def _subset_df_locIds(self, df):
+    def _subset_df_locIds(self, df: pd.DataFrame) -> pd.DataFrame:
         return subset_df_locIds(
             df,
-            self.cols_key_meta["loc_id"],
+            _require(self.cols_key_meta, "loc_id", "cols_key_meta"),
             self.selected_loc_ids,
         ).reset_index(drop=True)
 
     @staticmethod
-    def empty_figs():
+    def empty_figs() -> Tuple[Any, Any]:
+        """Placeholder (pca_fig, pmap_fig) pair shown before any data is loaded."""
         return empty_fig(), empty_fig()
 
-    def plot_pmap(self, n_neighbors):
+    def _color_maps_for_plot_groups(self) -> Tuple[Dict[Any, str], Dict[Any, str]]:
+        """dict_generic_colors[plot_groups[0]]/[1] - a stale/mismatched plot
+        group selection (e.g. dropdown options built before a re-upload) means
+        the group column itself isn't a key here, not just a group value
+        within it (plotting.py's own fallback-on-miss only covers the latter),
+        so this is checked explicitly with a clear error rather than a bare
+        KeyError two frames down inside plotting.py."""
+        dict_generic_colors = _require(self.meta_data, "dict_generic_colors", "meta_data")
+        colors = []
+        for group_col in self.plot_groups:
+            if group_col not in dict_generic_colors:
+                logger.error(
+                    "Plot group '%s' not found in dict_generic_colors (have: %s)",
+                    group_col,
+                    list(dict_generic_colors),
+                )
+                raise KeyError(
+                    f"Plot group '{group_col}' not found in this session's color "
+                    "mapping - the group dropdown selection may be stale."
+                )
+            colors.append(dict_generic_colors[group_col])
+        return colors[0], colors[1]
+
+    def _build_plot_context(self) -> PlotContext:
+        """PlotContext for the current plot groups/selection - bundles the
+        cluster of args make_fig_pca/make_fig_pmap need but never vary
+        between the two calls."""
+        color_primary, color_secondary = self._color_maps_for_plot_groups()
+        return PlotContext(
+            col_loc_id=_require(self.cols_key_meta, "loc_id", "cols_key_meta"),
+            col_primary_domain=self.plot_groups[0],
+            col_secondary_domain=self.plot_groups[1],
+            col_date=_require(self.cols_key_meta, "date", "cols_key_meta"),
+            dict_color_map_primary=color_primary,
+            dict_color_map_secondary=color_secondary,
+            name_marker_map=self.dict_marker_map,
+            col_entity_id=self.cols_key_meta.get("entity_id"),
+        )
+
+    def plot_pmap(self, n_neighbors: int) -> Any:
+        """Render the PaCMAP biplot figure for the current plot groups/selection."""
         return make_fig_pmap(
             self.df_plot_pmap,
-            self.meta_data["dict_generic_colors"][self.plot_groups[0]],
-            self.meta_data["dict_generic_colors"][self.plot_groups[1]],
-            self.dict_marker_map,
-            self.cols_key_meta["loc_id"],
-            self.plot_groups[0],
-            self.plot_groups[1],
-            self.cols_key_meta["date"],
+            self._build_plot_context(),
             n_neighbors,
         )
 
-    def plot_pca(self):
+    def plot_pca(self) -> Any:
+        """Render the PCA biplot figure for the current plot groups/selection."""
         return make_fig_pca(
             self.df_plot_pca,
             self.ldg_df,
             self.expl_var,
-            self.meta_data["dict_generic_colors"][self.plot_groups[0]],
-            self.meta_data["dict_generic_colors"][self.plot_groups[1]],
-            self.dict_marker_map,
-            self.cols_key_meta["loc_id"],
-            self.plot_groups[0],
-            self.plot_groups[1],
-            self.cols_key_meta["date"],
+            self._build_plot_context(),
         )
 
 
 class SessionManager:
+    """Packaging helpers for building the `working_data` session payload."""
+
     @staticmethod
-    def package_plotting_data(plot_components_pca, plot_components_pmap, meta_data):
+    def package_plotting_data(
+        plot_components_pca: tuple, plot_components_pmap: pd.DataFrame, meta_data: dict
+    ) -> Dict[str, Any]:
+        """Bundle PCA/PaCMAP dimension-reduction outputs into the JSON-serializable
+        `working_data` shape DataPlotter expects."""
+        date_col = _require(
+            _require(meta_data, "cols_key_meta", "meta_data"), "date", "cols_key_meta"
+        )
         dict_working_data = {
-            "df_plot_pca": pandas_to_json(
-                plot_components_pca[0], meta_data["cols_key_meta"]["date"]
-            ),
+            "df_plot_pca": pandas_to_json(plot_components_pca[0], date_col),
             "ldg_df": plot_components_pca[1].to_json(),
             "expl_var": plot_components_pca[2],
-            "df_plot_pmap": pandas_to_json(
-                plot_components_pmap, meta_data["cols_key_meta"]["date"]
-            ),
+            "df_plot_pmap": pandas_to_json(plot_components_pmap, date_col),
         }
         return dict_working_data
-
-    # @staticmethod
-    # def package_session_data(
-    #     json_master_data,  # json level
-    #     json_meta_data,
-    #     json_hash_data,
-    #     json_working_data,
-    #     feature_selection_dropdown,
-    #     loc_id_dropdown,
-    #     pmap_neighbors,
-    # ):
-    #     session = {
-    #         "master_data": json_master_data,
-    #         "meta_data": json_meta_data,
-    #         "hash_data": json_hash_data,
-    #         "working_data": json_working_data,
-    #         "feature_selection_dropdown": feature_selection_dropdown,
-    #         "loc_id_dropdown": loc_id_dropdown,
-    #         "pmap_neighbors": pmap_neighbors,
-    #     }
-
-    #     return json.dumps(session)

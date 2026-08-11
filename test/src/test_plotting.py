@@ -6,12 +6,15 @@ from plotly.graph_objects import Figure
 from app.src.plotting import (
     empty_fig,
     make_map,
-    find_axis_limits,
-    generate_text,
+    PlotContext,
+    _find_axis_limits,
+    _generate_text,
     make_base_scatter_plot,
-    annotate_loadings,
+    _annotate_loadings,
     make_fig_pmap,
     make_fig_pca,
+    _DEFAULT_COLOR,
+    _DEFAULT_MARKER_SYMBOL,
 )
 
 
@@ -46,6 +49,19 @@ class TestPlottingFunctions(unittest.TestCase):
         self.name_marker_map = {"Site1": 1, "Site2": 2}
         self.expl_var = [0.6, 0.4]
 
+    def _make_ctx(self, **overrides) -> PlotContext:
+        defaults = dict(
+            col_loc_id="LOC_ID",
+            col_primary_domain="PrimaryDomain",
+            col_secondary_domain="SecondaryDomain",
+            col_date="Date",
+            dict_color_map_primary=self.dict_color_map_primary,
+            dict_color_map_secondary=self.dict_color_map_secondary,
+            name_marker_map=self.name_marker_map,
+        )
+        defaults.update(overrides)
+        return PlotContext(**defaults)
+
     def test_empty_fig(self):
         fig = empty_fig()
         self.assertIsInstance(fig, Figure)
@@ -53,55 +69,111 @@ class TestPlottingFunctions(unittest.TestCase):
     def test_make_map(self):
         fig = make_map(self.df, lat="LATITUDE", lon="LONGITUDE", color="color")
         self.assertIsInstance(fig, Figure)
+        self.assertEqual(fig.data[0].type, "scattermap")
 
     def test_find_axis_limits(self):
-        x_min, x_max, y_min, y_max = find_axis_limits(self.df, "PMAP1", "PMAP2")
+        x_min, x_max, y_min, y_max = _find_axis_limits(self.df, "PMAP1", "PMAP2")
         self.assertAlmostEqual(x_min, 0.9)
         self.assertAlmostEqual(x_max, 2.1)
         self.assertAlmostEqual(y_min, 2.9)
         self.assertAlmostEqual(y_max, 4.1)
 
     def test_generate_text(self):
-        texts = generate_text(
-            "Site1", self.df, "PrimaryDomain", "SecondaryDomain", "Date"
-        )
+        texts = _generate_text("Site1", self.df, "PrimaryDomain", "SecondaryDomain", "Date")
         self.assertEqual(len(texts), len(self.df))
+        self.assertIn("<b>Site1</b><br><b>Primary Domain:</b>", texts[0])
+        self.assertIn("<b>Secondary Domain:</b>", texts[0])
+
+    def test_generate_text_same_domain_omits_secondary(self):
+        # primary_domain and secondary_domain resolve to the same value for
+        # every row - the "Secondary Domain" line should be dropped, not
+        # repeated.
+        df = self.df.copy()
+        df["SecondaryDomain"] = df["PrimaryDomain"]
+        texts = _generate_text("Site1", df, "PrimaryDomain", "SecondaryDomain", "Date")
+        self.assertNotIn("Secondary Domain", texts[0])
         self.assertIn("<b>Site1</b><br><b>Primary Domain:</b>", texts[0])
 
     def test_make_base_scatter_plot(self):
         fig = make_base_scatter_plot(
             df=self.df,
-            dict_color_map_primary=self.dict_color_map_primary,
-            dict_color_map_secondary=self.dict_color_map_secondary,
-            name_marker_map=self.name_marker_map,
-            col_loc_id="LOC_ID",
-            col_primary_domain="PrimaryDomain",
-            col_secondary_domain="SecondaryDomain",
-            col_date="Date",
+            ctx=self._make_ctx(),
             x_col="PMAP1",
             y_col="PMAP2",
-            title="Test Plot",
             x_label="X Axis",
             y_label="Y Axis",
         )
         self.assertIsInstance(fig, Figure)
 
+    def test_make_base_scatter_plot_customdata_defaults_to_loc_id(self):
+        # No col_entity_id passed - customdata should still be populated,
+        # falling back to loc_id for both columns.
+        fig = make_base_scatter_plot(
+            df=self.df,
+            ctx=self._make_ctx(),
+            x_col="PMAP1",
+            y_col="PMAP2",
+            x_label="X Axis",
+            y_label="Y Axis",
+        )
+        for trace in fig.data:
+            for row in trace.customdata:
+                self.assertEqual(row[0], row[1])
+
+    def test_make_base_scatter_plot_collapses_repeat_visits_by_location(self):
+        df = pd.concat([self.df, self.df], ignore_index=True)
+        df["ENTITY_ID"] = [
+            "Site1_2023-01-01",
+            "Site2_2023-01-02",
+            "Site1_2023-06-01",
+            "Site2_2023-06-02",
+        ]
+        fig = make_base_scatter_plot(
+            df=df,
+            ctx=self._make_ctx(col_entity_id="ENTITY_ID"),
+            x_col="PMAP1",
+            y_col="PMAP2",
+            x_label="X Axis",
+            y_label="Y Axis",
+        )
+        # One trace per location - legend does not explode per sample/date.
+        self.assertEqual(len(fig.data), 2)
+        trace_site1 = next(t for t in fig.data if t.name == "Site1")
+        self.assertEqual(len(trace_site1.x), 2)
+        self.assertEqual(
+            [row[1] for row in trace_site1.customdata],
+            ["Site1_2023-01-01", "Site1_2023-06-01"],
+        )
+
+    def test_make_base_scatter_plot_falls_back_to_defaults_on_missing_group(self):
+        # PrimaryDomain/SecondaryDomain/loc_id values with no entry in the
+        # lookup dicts should degrade to the default color/marker (and log a
+        # warning) rather than raising.
+        ctx = self._make_ctx(
+            dict_color_map_primary={},
+            dict_color_map_secondary={},
+            name_marker_map={},
+        )
+        with self.assertLogs("wq_spatial_app.app.src.plotting", level="WARNING"):
+            fig = make_base_scatter_plot(
+                df=self.df,
+                ctx=ctx,
+                x_col="PMAP1",
+                y_col="PMAP2",
+                x_label="X Axis",
+                y_label="Y Axis",
+            )
+        for trace in fig.data:
+            self.assertEqual(trace.marker.color, _DEFAULT_COLOR)
+            self.assertEqual(trace.marker.symbol, _DEFAULT_MARKER_SYMBOL)
+
     def test_annotate_loadings(self):
         fig = empty_fig()
-        fig = annotate_loadings(self.ldg_df, fig, "PC1", "PC2")
+        fig = _annotate_loadings(self.ldg_df, fig, "PC1", "PC2")
         self.assertIsInstance(fig, Figure)
 
     def test_make_fig_pmap(self):
-        fig = make_fig_pmap(
-            df=self.df,
-            dict_color_map_primary=self.dict_color_map_primary,
-            dict_color_map_secondary=self.dict_color_map_secondary,
-            name_marker_map=self.name_marker_map,
-            col_loc_id="LOC_ID",
-            col_primary_domain="PrimaryDomain",
-            col_secondary_domain="SecondaryDomain",
-            col_date="Date",
-        )
+        fig = make_fig_pmap(df=self.df, ctx=self._make_ctx())
         self.assertIsInstance(fig, Figure)
 
     def test_make_fig_pca(self):
@@ -109,13 +181,7 @@ class TestPlottingFunctions(unittest.TestCase):
             df_pca=self.df,
             ldg_df=self.ldg_df,
             expl_var=self.expl_var,
-            dict_color_map_primary=self.dict_color_map_primary,
-            dict_color_map_secondary=self.dict_color_map_secondary,
-            name_marker_map=self.name_marker_map,
-            col_loc_id="LOC_ID",
-            col_primary_domain="PrimaryDomain",
-            col_secondary_domain="SecondaryDomain",
-            col_date="Date",
+            ctx=self._make_ctx(),
         )
         self.assertIsInstance(fig, Figure)
 

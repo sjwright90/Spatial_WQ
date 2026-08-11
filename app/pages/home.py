@@ -1,6 +1,7 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 from .www.style.style import *
+from src.data_model import ROLE_REGISTRY, ColumnRole
 
 navbar = dbc.NavbarSimple(
     children=[
@@ -183,6 +184,70 @@ uploaders = html.Div(
     style=BUTTON_STYLE,
 )
 
+
+def _role_mapping_row(role_spec):
+    """Build one labeled dropdown for a RoleSpec, driven entirely by
+    data_model.ROLE_REGISTRY - adding/removing a role there is reflected here
+    automatically, no per-role component authoring needed."""
+    return html.Div(
+        [
+            html.P(
+                role_spec.label + (" *" if role_spec.required else " (optional)"),
+                style={"margin-bottom": "2px"},
+            ),
+            dcc.Dropdown(
+                id={"type": "role-mapping", "role": role_spec.role.value},
+                options=[],
+                value=[] if role_spec.multi else None,
+                multi=role_spec.multi,
+                style=DROPDOWN_MULTI_STYLE if role_spec.multi else DROPDOWN_UNI_STYLE,
+                placeholder="Select column(s)..." if role_spec.multi else "Select column...",
+            ),
+        ],
+        style={"margin-bottom": "8px"},
+    )
+
+
+# One dropdown per role except GROUP_COLOR, which is rendered dynamically
+# (per selected plotting-group) in mapping_group_color_section below.
+mapping_role_rows = [
+    _role_mapping_row(spec) for spec in ROLE_REGISTRY if spec.role != ColumnRole.GROUP_COLOR
+]
+
+mapping_group_color_section = html.Div(
+    [
+        html.P("Plotting group colors (optional)", style={"margin-bottom": "2px"}),
+        html.Div(id="mapping-group-color-container", children=[]),
+    ]
+)
+
+mapping_issues_container = dbc.Alert(
+    id="mapping-issues-container",
+    children=[],
+    color="danger",
+    is_open=False,
+)
+
+mapping_modal = dbc.Modal(
+    [
+        dbc.ModalHeader(dbc.ModalTitle("Map CSV columns")),
+        dbc.ModalBody(
+            html.Div(mapping_role_rows + [mapping_group_color_section, mapping_issues_container])
+        ),
+        dbc.ModalFooter(
+            html.Button(
+                "Confirm mapping",
+                id="confirm-mapping-button",
+                style=BUTTON_STYLE,
+            )
+        ),
+    ],
+    id="mapping-modal",
+    is_open=False,
+    size="lg",
+    backdrop="static",
+)
+
 map_div = html.Div(
     children=[
         dcc.Graph(
@@ -276,6 +341,7 @@ floating_alert_container = html.Div(
 main_content = html.Div(
     children=[
         uploaders,
+        mapping_modal,
         plots_div,
         action_buttons,
         selector_div,
@@ -298,6 +364,9 @@ def create_page_map():
             ),  # TODO: consider using 'session' storage for plotting data to reduce parsing/unparsing JSON each time plot is updated
             dcc.Store(id="side_click"),
             dcc.Store(id="map-relayout-store"),
+            dcc.Store(
+                id="raw-upload-store"
+            ),  # {content_string, columns} for the pending upload, staged until mapping is confirmed
             navbar,
             sidebar,
             floating_alert_container,
