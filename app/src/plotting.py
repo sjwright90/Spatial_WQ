@@ -382,6 +382,20 @@ def make_fig_pmap(
     return plotly_fig
 
 
+def _component_explained_variance(col_name: str, expl_var: List[float], prefix: str = "PC") -> float:
+    """`expl_var[n-1]` for a `"{prefix}{n}"` column name (e.g. "PC3" -> index 2),
+    so the axis label always reports the variance for whichever component is
+    actually plotted on that axis - not just PC1/PC2."""
+    try:
+        idx = int(col_name[len(prefix):]) - 1
+        return expl_var[idx]
+    except (ValueError, IndexError):
+        logger.warning(
+            "Could not resolve explained variance for column %r; defaulting to 0", col_name
+        )
+        return 0.0
+
+
 def make_fig_pca(
     df_pca: pd.DataFrame,
     ldg_df: pd.DataFrame,
@@ -392,14 +406,15 @@ def make_fig_pca(
     col_metal: str = "metals",
 ) -> go.Figure:
     """PCA biplot (PC1/PC2 columns by default + loading-vector annotations)
-    for the current plot groups."""
+    for the current plot groups. x_col/y_col select which computed
+    components to plot (e.g. "PC1"/"PC3")."""
     plotly_fig = make_base_scatter_plot(
         df=df_pca,
         ctx=ctx,
         x_col=x_col,
         y_col=y_col,
-        x_label=f"{x_col} ({expl_var[0]*100:.2f}%)",
-        y_label=f"{y_col} ({expl_var[1]*100:.2f}%)",
+        x_label=f"{x_col} ({_component_explained_variance(x_col, expl_var)*100:.2f}%)",
+        y_label=f"{y_col} ({_component_explained_variance(y_col, expl_var)*100:.2f}%)",
     )
 
     plotly_fig = _annotate_loadings(ldg_df, plotly_fig, x_col, y_col, col_metal)

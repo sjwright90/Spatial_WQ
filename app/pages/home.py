@@ -427,6 +427,32 @@ dropdown_n_neighbers = html.Div(
     ]
 )
 
+dropdown_pca_x_component = html.Div(
+    [
+        html.P("PCA X axis"),
+        dcc.Dropdown(
+            id="pca-x-component",
+            options=[{"label": "PC1", "value": "PC1"}],
+            value="PC1",
+            clearable=False,
+            style=DROPDOWN_NUM_STYLE,
+        ),
+    ]
+)
+
+dropdown_pca_y_component = html.Div(
+    [
+        html.P("PCA Y axis"),
+        dcc.Dropdown(
+            id="pca-y-component",
+            options=[{"label": "PC2", "value": "PC2"}],
+            value="PC2",
+            clearable=False,
+            style=DROPDOWN_NUM_STYLE,
+        ),
+    ]
+)
+
 dropdown_loc_ids = html.Div(
     [
         html.P("Select Location IDs"),
@@ -453,15 +479,24 @@ dropdown_features = html.Div(
     ]
 )
 
-selector_div = html.Div(
+apply_row = html.Div(
     children=[
-        range_slider_date_filter,
         html.Button(
             "Apply",
             id="apply-button",
             style=BUTTON_STYLE,
         ),
         dropdown_n_neighbers,
+        dropdown_pca_x_component,
+        dropdown_pca_y_component,
+    ],
+    className="d-flex flex-row align-items-end",
+)
+
+selector_div = html.Div(
+    children=[
+        range_slider_date_filter,
+        apply_row,
         dropdown_loc_ids,
         dropdown_features,
     ],

@@ -63,7 +63,9 @@ columns via the modal in `app/pages/home.py`.
 **Old fixtures/tests referencing the prefix convention were rewritten**, not adapted —
 if you find a stray reference to `LOCATION-ID_`/`NUMERIC-ANALYTE_`/etc. anywhere, it's
 either a deliberate historical comment or a bug, not a live code path. Full design
-record + list of decisions made: `docs/agent-context/REFACTOR-HANDOFF.md`.
+record + list of decisions made: `docs/agent-context/codebase-map.md`'s CSV-upload
+workflow section (a `REFACTOR-HANDOFF.md` was referenced here previously but never
+actually existed in the repo history — don't go looking for it).
 
 **No end-to-end browser click-through of the new upload -> map -> confirm -> plot flow
 has been verified yet** as of the refactor commit — only the automated test suite and a
@@ -146,6 +148,6 @@ intentional for a small trusted user base; flag if asked to touch session-ID han
 
 There's no way to save/reuse a `ColumnMapping` across uploads — every upload requires
 re-mapping columns from scratch, even for the same recurring CSV shape. This was an
-explicit scope decision during the declarative-data-model refactor (see
-REFACTOR-HANDOFF.md), not an oversight. If asked to add persistence, Redis (once fixed)
-is the natural place, or a new lightweight local store.
+explicit scope decision during the declarative-data-model refactor, not an oversight.
+If asked to add persistence, Redis (once fixed) is the natural place, or a new
+lightweight local store.

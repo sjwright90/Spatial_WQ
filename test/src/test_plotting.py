@@ -235,6 +235,27 @@ class TestPlottingFunctions(unittest.TestCase):
         )
         self.assertIsInstance(fig, Figure)
 
+    def test_make_fig_pca_selectable_component_pair(self):
+        # PC1 vs PC3 (not the PC1/PC2 default) must plot the right columns
+        # and label each axis with *its own* component's explained variance,
+        # not always expl_var[0]/[1].
+        df = self.df.copy()
+        df["PC3"] = [1.1, 1.3]
+        ldg_df = self.ldg_df.copy()
+        ldg_df["PC3"] = [0.5, 0.6]
+        expl_var = [0.6, 0.3, 0.1]
+        fig = make_fig_pca(
+            df_pca=df,
+            ldg_df=ldg_df,
+            expl_var=expl_var,
+            ctx=self._make_ctx(),
+            x_col="PC1",
+            y_col="PC3",
+        )
+        self.assertIn("10.00%", fig.layout.yaxis.title.text)
+        self.assertIn("PC3", fig.layout.yaxis.title.text)
+        self.assertTrue(all(trace.y[0] in df["PC3"].values for trace in fig.data))
+
 
 if __name__ == "__main__":
     unittest.main()

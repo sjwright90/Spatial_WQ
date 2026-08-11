@@ -840,6 +840,42 @@ def process_working_data(
     return dump_store(dict_working_data), dump_store(session)
 
 
+# populate the PCA X/Y component dropdowns from however many PCs were computed
+@app.callback(
+    Output("pca-x-component", "options"),
+    Output("pca-x-component", "value"),
+    Output("pca-y-component", "options"),
+    Output("pca-y-component", "value"),
+    Input("working-data", "data"),
+    State("pca-x-component", "value"),
+    State("pca-y-component", "value"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.plotting", fallback=([], "PC1", [], "PC2"))
+def update_pca_component_dropdowns(
+    working_data: Optional[str],
+    current_x: Optional[str],
+    current_y: Optional[str],
+) -> tuple:
+    """Repopulate the PCA X/Y axis dropdowns whenever working-data is
+    rebuilt, from however many components `process_dimension_reduction`
+    actually computed. Keeps the user's current selection if it's still
+    valid (e.g. re-running with the same analytes), otherwise falls back to
+    PC1/PC2."""
+    if working_data is None:
+        raise PreventUpdate
+    working_data = load_store(working_data)
+    ldg_df = pd.read_json(io.StringIO(working_data["ldg_df"]))
+    components = sorted(
+        (c for c in ldg_df.columns if c != "metals"), key=lambda c: int(c[2:])
+    )
+    options = [{"label": c, "value": c} for c in components]
+    x_value = current_x if current_x in components else components[0]
+    y_default = components[1] if len(components) > 1 else components[0]
+    y_value = current_y if current_y in components else y_default
+    return options, x_value, options, y_value
+
+
 # grab the selected data from the map and update the loc_id-dropdown
 @app.callback(
     Output("loc-id-dropdown", "value", allow_duplicate=True),
@@ -1181,6 +1217,8 @@ def download_custom_groups_csv(n_clicks: Optional[int], session: Optional[str]) 
         Input("plot-group-dropdown-2", "value"),
         Input("date-range-slider", "value"),
         Input("custom-color-overrides", "data"),
+        Input("pca-x-component", "value"),
+        Input("pca-y-component", "value"),
     ],
     [
         State(component_id="meta-data", component_property="data"),
@@ -1196,6 +1234,8 @@ def plot_data(
     plot_group_2: Optional[str],
     date_range: Optional[List[int]],
     custom_color_overrides: Optional[str],
+    pca_x_component: Optional[str],
+    pca_y_component: Optional[str],
     meta_data: Optional[str],
     n_neighbors: Optional[int],
 ) -> Tuple[Any, Any]:
@@ -1218,7 +1258,9 @@ def plot_data(
         [plot_group_1, plot_group_2],
         date_range,
     )
-    fig_pca = data_plotter.plot_pca()
+    fig_pca = data_plotter.plot_pca(
+        x_col=pca_x_component or "PC1", y_col=pca_y_component or "PC2"
+    )
     fig_pmap = data_plotter.plot_pmap(n_neighbors=n_neighbors)
     return fig_pca, fig_pmap
 

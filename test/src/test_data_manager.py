@@ -308,6 +308,31 @@ class TestDataPlotter(unittest.TestCase):
         fig_none = plotter_none.plot_pca()
         self.assertIsNotNone(fig_none)
 
+    def test_pca_component_options_lists_computed_pcs_in_order(self):
+        plotter = DataPlotter(
+            self.working_data,
+            self.meta_data,
+            self.selected_loc_ids,
+            self.plot_groups,
+            self.date_range,
+        )
+        self.assertEqual(plotter.pca_component_options(), ["PC1", "PC2"])
+
+    def test_plot_pca_accepts_selectable_component_pair(self):
+        # working_data only computes PC1/PC2 here, but plot_pca must still
+        # accept (and use) an explicit x_col/y_col rather than hardcoding
+        # PC1/PC2.
+        plotter = DataPlotter(
+            self.working_data,
+            self.meta_data,
+            self.selected_loc_ids,
+            self.plot_groups,
+            self.date_range,
+        )
+        fig = plotter.plot_pca(x_col="PC2", y_col="PC1")
+        self.assertIn("PC2", fig.layout.xaxis.title.text)
+        self.assertIn("PC1", fig.layout.yaxis.title.text)
+
     def test_plot_pca_with_entity_id_and_repeat_visits_collapses_legend(self):
         # Same Site_Name ("1A") twice with different dates - should collapse
         # into one legend entry, not explode into two.

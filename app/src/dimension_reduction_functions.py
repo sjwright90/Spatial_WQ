@@ -15,7 +15,12 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
+MAX_PCA_COMPONENTS = 5
+
+
+def run_pca(
+    df: DataFrame, cat_cols: list, analytes: list, n_components: int = MAX_PCA_COMPONENTS
+) -> tuple:
     """
     Run PCA on a dataframe.
 
@@ -27,6 +32,11 @@ def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
         Categorical columns in df.
     analytes : list-like
         Analytes to run PCA on.
+    n_components : int, default MAX_PCA_COMPONENTS
+        Target number of components to compute. Capped at
+        min(n_components, n_analytes, n_samples) since PCA can't return more
+        components than that - selectable-PC-pair plotting (PC1 vs PC3, etc.)
+        needs more than 2 components available whenever the data supports it.
 
     Returns
     -----
@@ -37,11 +47,12 @@ def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
     expl_var
         Explained variance.
     """
+    n_components = max(1, min(n_components, len(analytes), len(df)))
     pca_obj, trns_df, ldg_df = pca_loading_matrix(
         df[analytes],
-        n_components=2,
+        n_components=n_components,
     )
-    df_plot = make_df_for_biplot(trns_df, df, col_list=cat_cols)
+    df_plot = make_df_for_biplot(trns_df, df, col_list=cat_cols, num_comp=n_components)
     expl_var = pca_obj.explained_variance_ratio_.tolist()
     return df_plot, ldg_df, expl_var
 
