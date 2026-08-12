@@ -49,6 +49,39 @@ questions):
 128 tests passing (`PYTHONPATH=. pytest test/`); no user smoke test yet for
 the clustering workflow specifically.
 
+**Upstream date "Filter"** (separate PO, now complete and committed - see
+`git log` on `feature/selectable-pca-components` for the full commit
+message; former handoff docs `02_NEXT-STEPS-DATETIMEFILTER-HANDOFF.md`/
+`02a_DATETIME-INTERVENING.md` have been deleted now that this landed):
+
+- `data_process.subset_df_dateRange`: day-level inclusive date-range filter
+  applied to `df_master` *before* PCA/PaCMAP/KMeans run (unlike the
+  pre-existing `date-range-slider` "Mask", which only trims already-computed
+  plot output and is untouched). `process_dimension_reduction`/
+  `process_clustering` both gained optional `col_date`/`date_range` kwargs,
+  applied first.
+- `build_custom_group_export_df` gained `date_filter_range`: any cell still
+  `DEFAULT_UNASSIGNED_CATEGORY` on a row outside the Filter range is
+  overwritten with a `DATE-FILTERED-[start->end]` marker on export.
+- UI: two independent `dcc.DatePickerSingle` boxes ("Min Date"/"Max Date")
+  in the "Plot filters" sidebar, each opening its calendar via
+  `with_portal=True` (renders on top of the page rather than behind the
+  plots). No hard min/max constraint - out-of-range typed dates are
+  accepted rather than silently reverted; the actual data range is shown as
+  a hint instead. A badge shows "Date filter pending" (live pickers differ
+  from what's Applied) vs. "Date filter active" (a narrower range is
+  Applied and pickers still match it).
+- Manual entity-picker (custom-group lasso-select) and clustering's
+  post-cluster entity dropdown both restrict options to the Filter range,
+  so a new assignment can never target a Filter-excluded entity.
+
+142 tests passing (`PYTHONPATH=. pytest test/`); user smoke-tested in their
+own dev server and confirmed working. `/code-review` run and all 3 findings
+fixed (NaT-handling mismatch between `subset_df_dateRange` and the export's
+out-of-range test, missing type hints, a cross-callback race on
+`date-filter-bounds-store` - resolved via a shared `_get_date_filter_bounds`
+helper).
+
 ---
 
 ## Next step: UI/UX - plots shrink when legend names get long
