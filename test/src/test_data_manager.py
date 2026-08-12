@@ -88,6 +88,8 @@ class TestDataPreprocessor(unittest.TestCase):
             preprocessor.cols_key_meta["plotting_groups"][0],
         )
         self.assertEqual(plotting_data["pmap_neighbors"], 15)
+        # Upstream date Filter starts unset (no filtering) on a fresh session.
+        self.assertIsNone(plotting_data["date_filter_range_dropdown_value"])
 
     def test_missing_required_role_leaves_validation_error_and_no_data(self):
         bad_mapping = ColumnMapping(location_id="Site_Name", latitude="Latitude", longitude="")

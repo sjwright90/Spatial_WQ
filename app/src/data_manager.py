@@ -174,6 +174,7 @@ class DataPreprocessor:
                 "feature_selection_dropdown_value": numeric_all,
                 "loc_id_dropdown_options": self.loc_id_all,
                 "loc_id_dropdown_value": self.loc_id_all,
+                "date_filter_range_dropdown_value": None,  # upstream date Filter, see subset_df_dateRange
                 "map_group_dropdown_options": plotting_groups,
                 "map_group_dropdown_value": plotting_groups[0],
                 "plot_group_dropdown_1_options": plotting_groups,

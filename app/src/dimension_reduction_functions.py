@@ -2,10 +2,11 @@ from pandas import DataFrame
 from sklearn.decomposition import PCA
 import pacmap
 
-from typing import Tuple
+from typing import Optional, Sequence, Tuple
 
 from .data_process import (
     make_df_for_biplot,
+    subset_df_dateRange,
     subset_df_locIds,
     subset_df_numericFeatures,
 )
@@ -165,10 +166,12 @@ def process_dimension_reduction(
     feature_selection,
     loc_id_selection,
     n_neighbors,
+    col_date: Optional[str] = None,
+    date_range: Optional[Sequence[str]] = None,
 ) -> Tuple[Tuple[DataFrame, DataFrame, list], DataFrame]:
     """
-    Subset `df` to the selected locations/analytes, CLR+scale it, and run
-    both PCA and PaCMAP on the result.
+    Subset `df` to the selected date range/locations/analytes, CLR+scale it,
+    and run both PCA and PaCMAP on the result.
 
     Parameters
     ----------
@@ -188,6 +191,13 @@ def process_dimension_reduction(
         Subset of location IDs to include.
     n_neighbors : int
         PaCMAP neighbor count.
+    col_date : str, optional
+        Name of the mapped date column. Together with `date_range`, this is
+        the upstream date "Filter" - applied before PCA/PaCMAP so it actually
+        changes the computed variance/embedding, unlike the downstream,
+        display-only "Mask" in `DataPlotter.df_between_dates`.
+    date_range : list of str, optional
+        `[start_date, end_date]`, inclusive. No filtering applied if None.
 
     Returns
     -------
@@ -203,6 +213,7 @@ def process_dimension_reduction(
         logger.error("process_dimension_reduction called with empty feature_selection")
         raise ValueError("No analytes selected for dimension reduction")
 
+    df = subset_df_dateRange(df, col_date, date_range)
     df = subset_df_locIds(df, col_loc_id, loc_id_selection)
     df, cols_numeric_all, cols_numeric_clr = subset_df_numericFeatures(
         df, cols_numeric_simple, cols_numeric_clr, feature_selection

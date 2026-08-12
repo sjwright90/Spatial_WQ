@@ -161,6 +161,37 @@ class TestProcessClusteringOutput(unittest.TestCase):
         pd.testing.assert_frame_equal(self.df, original)
 
 
+class TestProcessClusteringDateFilter(unittest.TestCase):
+    """The upstream date Filter must reach subset_df_dateRange before
+    clustering, mirroring process_dimension_reduction, so excluded rows can
+    never end up in a cluster/custom-group assignment."""
+
+    def setUp(self):
+        self.df = _make_df(n_groups=3, n_per_group=4)
+        self.loc_ids = self.df["Site_Name"].tolist()
+        # First 8 rows (groups 0-1) in 2020, last 4 rows (group 2) in 2023.
+        dates = ["2020-01-01"] * 8 + ["2023-01-01"] * 4
+        self.df["Sample_Date"] = pd.to_datetime(dates)
+
+    def test_date_range_excludes_out_of_range_entities(self):
+        result = process_clustering(
+            self.df,
+            "Site_Name",
+            "Entity_Id",
+            ["Copper", "Zinc", "Lead"],
+            [],
+            feature_selection=["Copper", "Zinc", "Lead"],
+            loc_id_selection=self.loc_ids,
+            feature_space=FEATURE_SPACE_CLR,
+            n_clusters=2,
+            col_date="Sample_Date",
+            date_range=["2020-01-01", "2020-01-01"],
+        )
+        expected_entity_ids = set(self.df.iloc[:8]["Entity_Id"])
+        self.assertEqual(set(result["Entity_Id"]), expected_entity_ids)
+        self.assertEqual(len(result), 8)
+
+
 class TestBuildPcaFeatureMatrixUnscaled(unittest.TestCase):
     """PC WARNING regression: clustering must use raw PCA scores, not the
     min-max-scaled scores the biplot uses - scaling would compress PC1's

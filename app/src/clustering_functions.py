@@ -7,13 +7,13 @@ choice of feature space (`FEATURE_SPACE_CLR` vs `FEATURE_SPACE_PCA`) and a
 KMeans fit on top.
 """
 
-from typing import List
+from typing import List, Optional, Sequence
 
 import numpy as np
 from pandas import DataFrame
 from sklearn.cluster import KMeans
 
-from .data_process import subset_df_locIds, subset_df_numericFeatures
+from .data_process import subset_df_dateRange, subset_df_locIds, subset_df_numericFeatures
 from .compositional_data_functions import clr_transform_scale
 from .dimension_reduction_functions import pca_loading_matrix, MAX_PCA_COMPONENTS
 from .logging_config import get_logger
@@ -84,9 +84,11 @@ def process_clustering(
     loc_id_selection: List[str],
     feature_space: str,
     n_clusters: int,
+    col_date: Optional[str] = None,
+    date_range: Optional[Sequence[str]] = None,
 ) -> DataFrame:
-    """Subset `df` to the selected locations/analytes, build a feature matrix
-    in `feature_space`, and run KMeans on it.
+    """Subset `df` to the selected date range/locations/analytes, build a
+    feature matrix in `feature_space`, and run KMeans on it.
 
     Parameters
     ----------
@@ -108,6 +110,14 @@ def process_clustering(
     n_clusters : int
         Number of KMeans clusters; must be between 2 and the number of
         selected samples.
+    col_date : str, optional
+        Name of the mapped date column. Together with `date_range`, this is
+        the upstream date "Filter" (see
+        `dimension_reduction_functions.process_dimension_reduction`) -
+        applied before clustering so excluded rows can never end up in a
+        cluster assignment.
+    date_range : list of str, optional
+        `[start_date, end_date]`, inclusive. No filtering applied if None.
 
     Returns
     -------
@@ -130,6 +140,7 @@ def process_clustering(
     if feature_space not in FEATURE_SPACE_CHOICES:
         raise ValueError(f"Unknown feature_space {feature_space!r}")
 
+    df = subset_df_dateRange(df, col_date, date_range)
     df = subset_df_locIds(df, col_loc_id, loc_id_selection)
     df, cols_numeric_all, cols_numeric_clr_subset = subset_df_numericFeatures(
         df, cols_numeric_simple, cols_numeric_clr, feature_selection
