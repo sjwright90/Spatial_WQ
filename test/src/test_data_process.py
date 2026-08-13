@@ -20,6 +20,8 @@ from app.src.data_process import (
     json_to_pandas,
     pc_scaler,
     make_df_for_biplot,
+    DEFAULT_UNASSIGNED_CATEGORY,
+    LIGHT_GREY_COLOR,
 )
 
 
@@ -53,6 +55,18 @@ class TestDataProcess(unittest.TestCase):
         result = make_color_dict(self.df, "Group")
         self.assertIn("A", result)
         self.assertIn("B", result)
+
+    def test_make_color_dict_unassigned_always_light_grey(self):
+        # "Unassigned" sorts late alphabetically among these values, so
+        # without special-casing it would land on whatever palette color
+        # falls at that position rather than always being light grey.
+        df = self.df.copy()
+        df["Group"] = ["Unassigned", "Z-Category", "Unassigned"]
+        result = make_color_dict(df, "Group")
+        self.assertEqual(result[DEFAULT_UNASSIGNED_CATEGORY], LIGHT_GREY_COLOR)
+        # "Unassigned" is excluded from the palette-zip, so it doesn't
+        # consume/shift a slot other categories would otherwise get.
+        self.assertNotEqual(result["Z-Category"], LIGHT_GREY_COLOR)
 
     def test_find_make_color_dict_auto_palette(self):
         result = find_make_color_dict(self.df, "Group")

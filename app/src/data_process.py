@@ -41,6 +41,7 @@ DISCRETE_COLOR_LIST = pc.qualitative.Alphabet
 DEFAULT_MAP_MARKER_SIZE = 10
 
 DEFAULT_CATEGORY_COLOR = "#808080"  # matches plotting._DEFAULT_COLOR
+LIGHT_GREY_COLOR = "#D3D3D3"  # always used for DEFAULT_UNASSIGNED_CATEGORY
 DEFAULT_UNASSIGNED_CATEGORY = "Unassigned"
 
 
@@ -84,9 +85,14 @@ def make_color_dict(df: DataFrame, col_plot_group: str) -> Dict[Any, str]:
     dict
         Dictionary with the plotting groups as keys and the colors as values.
     """
-    _n_unique_colors = df[col_plot_group].nunique()
+    unique_values = sorted(df[col_plot_group].unique())
+    has_unassigned = DEFAULT_UNASSIGNED_CATEGORY in unique_values
+    palette_values = [v for v in unique_values if v != DEFAULT_UNASSIGNED_CATEGORY]
+    _n_unique_colors = len(palette_values)
     _unique_color_list = DISCRETE_COLOR_LIST * (_n_unique_colors // len(DISCRETE_COLOR_LIST) + 1)
-    _dict_color = {k: v for k, v in zip(sorted(df[col_plot_group].unique()), _unique_color_list)}
+    _dict_color = {k: v for k, v in zip(palette_values, _unique_color_list)}
+    if has_unassigned:
+        _dict_color[DEFAULT_UNASSIGNED_CATEGORY] = LIGHT_GREY_COLOR
     return _dict_color
 
 

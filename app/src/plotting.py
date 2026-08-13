@@ -178,6 +178,42 @@ def _format_date_range(df: pd.DataFrame, date_col: Optional[str]) -> str:
     return f"{date_min.date()}->{date_max.date()}"
 
 
+def _wrap_legend_label(label: str, max_len: int = 20) -> str:
+    """Insert <br> breaks into a split-category legend label
+    ("{loc_code} [{date_min}->{date_max}]" or "{loc_code} [{date}]", see
+    make_base_scatter_plot/_format_date_range) so no visual line exceeds
+    `max_len` chars - Plotly legend text is interpreted as pseudo-HTML, so
+    this is the only way to force a wrap (entrywidth/entrywidthmode
+    truncates, it doesn't wrap).
+
+    Exploits the label's fixed 2-token shape rather than generic word-wrap:
+    only two break points are ever considered, in priority order -
+    (1) the space between loc_code and the bracketed date range, then
+    (2) the "->" between date_min/date_max, kept intact and attached to
+    the end of the first line. Never fractures a token (loc_code or a
+    single date) - if a token alone still exceeds max_len, that line is
+    left long rather than hard-split, since a mid-token break (e.g.
+    "20<br>22->2024") is worse than one over-length line."""
+    if len(label) <= max_len:
+        return label
+    if " [" not in label or not label.endswith("]"):
+        # Doesn't match the expected "{loc_code} [...]" shape - no safe
+        # break point to exploit, leave unwrapped rather than guess.
+        return label
+    loc_code, rest = label.split(" [", 1)
+    date_part = rest[:-1]  # strip trailing "]"
+    bracket_part = f"[{date_part}]"
+    if len(bracket_part) <= max_len:
+        return f"{loc_code}<br>{bracket_part}"
+    if "->" in date_part:
+        date_min, date_max = date_part.split("->", 1)
+        return f"{loc_code}<br>[{date_min}-><br>{date_max}]"
+    # Single date, no "->" to break on - can't split further without
+    # fracturing the date token, leave the bracketed part on its own long
+    # line.
+    return f"{loc_code}<br>{bracket_part}"
+
+
 def _generate_text(
     site: str,
     df: pd.DataFrame,
@@ -268,7 +304,9 @@ def make_base_scatter_plot(
                 & (group_df[ctx.col_secondary_domain] == secondary_value)
             ]
             trace_name = (
-                f"{loc_code} [{_format_date_range(sub_df, ctx.col_date)}]"
+                _wrap_legend_label(
+                    f"{loc_code} [{_format_date_range(sub_df, ctx.col_date)}]"
+                )
                 if split_by_category
                 else loc_code
             )

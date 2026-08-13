@@ -39,7 +39,11 @@ One flat Flask+Dash app, no blueprints/router:
   needed minimal edits.
 - `app/src/data_process.py` — column-reshaping/color-dict/coordinate-extraction
   helpers, `pandas_to_json`/`json_to_pandas` (de)serialization. The old regex column
-  classifiers (`get_key_cols_*`, `rename_cols_*`) are gone — see below.
+  classifiers (`get_key_cols_*`, `rename_cols_*`) are gone — see below. `make_color_dict`
+  always assigns `DEFAULT_UNASSIGNED_CATEGORY` (`"Unassigned"`) the fixed
+  `LIGHT_GREY_COLOR` (`#D3D3D3`) rather than letting it fall wherever it lands in the
+  alphabetically-sorted palette-zip — it's excluded from that zip entirely so it doesn't
+  also consume a palette slot from the other categories.
 - `app/src/compositional_data_functions.py` — CLR transform + scaling.
 - `app/src/dimension_reduction_functions.py` — PCA/PaCMAP pipeline
   (`process_dimension_reduction`). `run_pca` computes up to `MAX_PCA_COMPONENTS` (5,
@@ -60,6 +64,13 @@ One flat Flask+Dash app, no blueprints/router:
   `make_fig_pmap`). Mostly untouched by the mapping refactor — see "Explicit column
   mapping" below for why — but `make_fig_pca` does take an arbitrary `x_col`/`y_col`
   component pair (not hardcoded PC1/PC2) to support the selectable-PC biplot.
+  `make_base_scatter_plot` (shared by `make_fig_pca`/`make_fig_pmap`) wraps long
+  split-category legend labels (`"{loc_code} [{date_min}->{date_max}]"`) via
+  `_wrap_legend_label`, which exploits that fixed 2-token shape rather than doing
+  generic word-wrap: break at the loc_code/bracket space first, fall back to the `->`
+  (kept intact) only if the bracketed date range alone still doesn't fit, and never
+  fractures a `loc_code` or a single date token — an over-length line is preferred over
+  a mid-token break.
 - `app/src/session_manager.py` — Redis read/write helpers. Wired up and working from
   `app/app.py` (fixed during the hardening pass — see GOTCHAS for history).
 - `app/src/cache_initialize.py` — Flask-Caching key/hash helpers. `generate_df_hash_version`
