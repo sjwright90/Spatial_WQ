@@ -103,10 +103,16 @@ If you find code elsewhere still relying on either function's old mutating behav
 (unlikely, since neither caller reused the mutated object), that's a bug now, not a
 documented gotcha.
 
-## requirements.txt encoding
+## Dependencies moved to pyproject.toml
 
-`app/requirements.txt` is UTF-16LE. If a Docker build or local `pip install` fails or
-misparses in a new environment, check encoding first.
+`app/requirements.txt` (UTF-16LE encoded — a recurring source of `pip install`
+failures/misparses) has been removed. Dependencies now live in `app/pyproject.toml`
+(`[project.dependencies]`, PEP 621), installed via `pip install .`. It's not a real
+installable package — `[tool.setuptools] packages = []` — it exists purely to give pip
+a dependency list. The Dockerfile was also fixed to actually `COPY` this file in before
+installing (the old Dockerfile ran `pip install -r requirements.txt` without ever
+copying `requirements.txt` into the build context — it's unclear the image ever built
+successfully as committed).
 
 ## pytest needs the repo root on PYTHONPATH
 

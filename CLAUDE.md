@@ -138,8 +138,12 @@ No CI config in the repo — tests run locally/manually only.
     `try...finally` so it's guaranteed to shut down even if the smoke test assertion
     fails — don't leave it running in the background for a later call to check.
 
-- `app/requirements.txt` is **UTF-16LE encoded**. If `pip install -r requirements.txt`
-  misbehaves, check encoding before debugging anything else.
+- Dependencies live in `app/pyproject.toml` (PEP 621 `[project.dependencies]`), not a
+  `requirements.txt` — the old file was UTF-16LE encoded and has been removed. It's
+  intentionally not an installable package (flat `app.py`/`pages`/`src` layout, no
+  `__init__.py`); `[tool.setuptools] packages = []` just gives `pip install .` a
+  dependency list to resolve. The Dockerfile `COPY`s only `pyproject.toml` first (for
+  layer caching) before `pip install .`, then copies the rest of `./app`.
 - `docker-compose.yml` is mid-refactor and will not stand up the `app` service as
   committed (no `build:`/`image:` directive; nginx/certbot volume mounts commented out).
   Don't assume `docker compose up` works — see GOTCHAS.

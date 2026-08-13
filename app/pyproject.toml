@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wq-spatial-app"
+version = "0.1.0"
+description = "Plotly Dash app for spatially exploring water-quality lab data."
+requires-python = ">=3.11"
+dependencies = [
+    "dash>=4.1",
+    "dash-bootstrap-components>=2.0",
+    "Flask>=3.1",
+    "pandas>=2.3",
+    "numpy>=2.4",
+    "scikit-learn>=1.8",
+    "pacmap>=0.8",
+    "plotly>=6.6",
+    "redis>=3.5",
+    "gunicorn>=20.1",
+]
+
+# Not an installable package (flat app.py/pages/src layout, no __init__.py) -
+# this only exists so `pip install .` resolves/installs [project.dependencies].
+[tool.setuptools]
+packages = []
