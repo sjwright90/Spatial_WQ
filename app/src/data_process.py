@@ -12,6 +12,7 @@
 # build_custom_group_export_df
 # extract_coordinate_dataframe
 # subset_df_locIds
+# subset_df_dateRange
 # subset_df_numericFeatures
 # pandas_to_json
 # json_to_pandas
@@ -24,8 +25,8 @@
 # declarative-mapping replacement. Date coercion also now lives in
 # data_mapping.py (per-row errors="coerce" + structured warnings, replacing
 # the old whole-column datetime.now() fallback that used to live here).
-from typing import Any, Dict, List, Optional, Tuple
-from pandas import DataFrame, concat, read_json, to_datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+from pandas import DataFrame, Timestamp, concat, read_json, to_datetime
 import io
 
 # import 'alphabet' from plotly
@@ -40,6 +41,7 @@ DISCRETE_COLOR_LIST = pc.qualitative.Alphabet
 DEFAULT_MAP_MARKER_SIZE = 10
 
 DEFAULT_CATEGORY_COLOR = "#808080"  # matches plotting._DEFAULT_COLOR
+LIGHT_GREY_COLOR = "#D3D3D3"  # always used for DEFAULT_UNASSIGNED_CATEGORY
 DEFAULT_UNASSIGNED_CATEGORY = "Unassigned"
 
 
@@ -83,9 +85,14 @@ def make_color_dict(df: DataFrame, col_plot_group: str) -> Dict[Any, str]:
     dict
         Dictionary with the plotting groups as keys and the colors as values.
     """
-    _n_unique_colors = df[col_plot_group].nunique()
+    unique_values = sorted(df[col_plot_group].unique())
+    has_unassigned = DEFAULT_UNASSIGNED_CATEGORY in unique_values
+    palette_values = [v for v in unique_values if v != DEFAULT_UNASSIGNED_CATEGORY]
+    _n_unique_colors = len(palette_values)
     _unique_color_list = DISCRETE_COLOR_LIST * (_n_unique_colors // len(DISCRETE_COLOR_LIST) + 1)
-    _dict_color = {k: v for k, v in zip(sorted(df[col_plot_group].unique()), _unique_color_list)}
+    _dict_color = {k: v for k, v in zip(palette_values, _unique_color_list)}
+    if has_unassigned:
+        _dict_color[DEFAULT_UNASSIGNED_CATEGORY] = LIGHT_GREY_COLOR
     return _dict_color
 
 
@@ -323,6 +330,7 @@ def build_custom_group_export_df(
     col_loc_id: str,
     col_date: Optional[str],
     custom_group_columns: List[str],
+    date_filter_range: Optional[Sequence[str]] = None,
 ) -> DataFrame:
     """
     Build a lookup export of `ENTITY_ID -> LOCATION_ID -> DATE -> [custom
@@ -340,6 +348,18 @@ def build_custom_group_export_df(
     custom_group_columns : list
         Names of user-created custom group columns to include. If empty, an
         empty-with-headers frame is returned.
+    date_filter_range : list or tuple of str, optional
+        `[start_date, end_date]` of the last-Applied upstream date Filter
+        (`session["plotting_data"]["date_filter_range_dropdown_value"]`). If
+        given (and `col_date` is mapped), any still-`DEFAULT_UNASSIGNED_CATEGORY`
+        cell on a row outside this range is overwritten with a
+        `DATE-FILTERED-[start->end]` marker in every `custom_group_columns`
+        column, so a reader can tell "excluded by the date Filter" apart from
+        "in scope but never categorized". A cell that already holds a real
+        category value is left untouched - the entity picker used to create
+        custom groups already only offers Filter-included entities, so a
+        non-default value here can only come from a group created under a
+        wider/no Filter and must not be silently overwritten.
 
     Returns
     -------
@@ -360,6 +380,20 @@ def build_custom_group_export_df(
 
     df_export = df_master[_cols_source].copy()
     df_export.columns = _cols_export
+
+    if date_filter_range and col_date:
+        start, end = Timestamp(date_filter_range[0]), Timestamp(date_filter_range[1])
+        # Negation of subset_df_dateRange's exact inclusive test, so NaT
+        # (unparseable) dates - which subset_df_dateRange already excludes
+        # from the Filter-included entity picker/PCA/clustering - are
+        # likewise treated as out-of-range here, not left "Unassigned".
+        in_range = (df_master[col_date] >= start) & (df_master[col_date] <= end)
+        out_of_range = ~in_range
+        marker = f"DATE-FILTERED-[{start.date()}->{end.date()}]"
+        for col in custom_group_columns:
+            still_unassigned = df_export[col] == DEFAULT_UNASSIGNED_CATEGORY
+            df_export.loc[out_of_range.values & still_unassigned, col] = marker
+
     return df_export
 
 
@@ -434,6 +468,42 @@ def subset_df_locIds(df: DataFrame, col_loc_id: str, loc_ids_subset) -> DataFram
                           the specified column match the provided location IDs.
     """
     return df[df[col_loc_id].isin(loc_ids_subset)].copy()
+
+
+def subset_df_dateRange(
+    df: DataFrame, col_date: Optional[str], date_range: Optional[Sequence[str]]
+) -> DataFrame:
+    """
+    Subset a DataFrame to rows whose `col_date` falls within an inclusive
+    `[start, end]` date range - the upstream "Filter" (as opposed to the
+    downstream, display-only "Mask" applied in `DataPlotter.df_between_dates`
+    after PCA/PaCMAP have already been computed). Day-level, not year-level -
+    matches the `dcc.DatePickerRange` filter control's precision.
+
+    A no-op copy passthrough when `col_date` is falsy (no date column mapped)
+    or `date_range` is falsy/None (no filter applied) - callers do not need
+    to special-case "date filtering is disabled".
+
+    Parameters
+    ----------
+    df : pandas DataFrame
+        The input DataFrame to be filtered.
+    col_date : str, optional
+        Name of the datetime64 column in `df` to filter on.
+    date_range : list or tuple of str, optional
+        `[start_date, end_date]`, inclusive, as ISO date strings (e.g. from
+        `dcc.DatePickerRange`) or anything `pandas.Timestamp` can parse.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A copy of `df`, restricted to `date_range` if both `col_date` and
+        `date_range` are given, otherwise an unfiltered copy.
+    """
+    if not col_date or not date_range:
+        return df.copy()
+    start, end = Timestamp(date_range[0]), Timestamp(date_range[1])
+    return df[(df[col_date] >= start) & (df[col_date] <= end)].copy()
 
 
 def subset_df_numericFeatures(

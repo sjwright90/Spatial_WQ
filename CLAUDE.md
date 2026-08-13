@@ -9,16 +9,14 @@ Deployed via Docker Compose behind nginx.
 See [docs/agent-context/GOTCHAS.md](docs/agent-context/GOTCHAS.md) for known-broken
 areas before touching Redis, caching, docker-compose, or the column-mapping/validation
 logic. Full architecture detail:
-[docs/agent-context/codebase-map.md](docs/agent-context/codebase-map.md). Technical
-record of the CSV-ingestion refactor (why it changed, what decisions were made):
-[docs/agent-context/REFACTOR-HANDOFF.md](docs/agent-context/REFACTOR-HANDOFF.md).
+[docs/agent-context/codebase-map.md](docs/agent-context/codebase-map.md).
 
 ## Architecture
 
 One flat Flask+Dash app, no blueprints/router:
 
 - `app/app.py` — `server = Flask(...)`, `app = dash.Dash(..., server=server)`, and
-  **every** `@app.callback` (lines ~48-607). This is the file to read/edit for any
+  **every** `@app.callback` (~1270 lines total). This is the file to read/edit for any
   interactivity change. Upload is a two-step flow: `stage_raw_upload` (opens the
   column-mapping modal) → `confirm_mapping` (builds a `ColumnMapping`, runs
   `DataPreprocessor`, populates the session stores).
@@ -41,13 +39,38 @@ One flat Flask+Dash app, no blueprints/router:
   needed minimal edits.
 - `app/src/data_process.py` — column-reshaping/color-dict/coordinate-extraction
   helpers, `pandas_to_json`/`json_to_pandas` (de)serialization. The old regex column
-  classifiers (`get_key_cols_*`, `rename_cols_*`) are gone — see below.
+  classifiers (`get_key_cols_*`, `rename_cols_*`) are gone — see below. `make_color_dict`
+  always assigns `DEFAULT_UNASSIGNED_CATEGORY` (`"Unassigned"`) the fixed
+  `LIGHT_GREY_COLOR` (`#D3D3D3`) rather than letting it fall wherever it lands in the
+  alphabetically-sorted palette-zip — it's excluded from that zip entirely so it doesn't
+  also consume a palette slot from the other categories.
 - `app/src/compositional_data_functions.py` — CLR transform + scaling.
 - `app/src/dimension_reduction_functions.py` — PCA/PaCMAP pipeline
-  (`process_dimension_reduction`).
+  (`process_dimension_reduction`). `run_pca` computes up to `MAX_PCA_COMPONENTS` (5,
+  capped by available analytes/samples), not just PC1/PC2, so the biplot can plot any
+  computed component pair.
+- `app/src/clustering_functions.py` — KMeans "auto-cluster" pipeline
+  (`process_clustering`), feeding the custom-group workflow. Mirrors
+  `process_dimension_reduction`'s subset/CLR-transform steps on the same
+  analytes/locations last applied to the PCA/PaCMAP plots
+  (`plotting_data.feature_selection_dropdown_value`/`loc_id_dropdown_value`),
+  then clusters on a chosen `feature_space`: `"clr"` (the CLR-transformed
+  analyte matrix) or `"pca"` (unscaled PCA scores over all computed
+  components, via `build_pca_feature_matrix` — deliberately NOT the min-max
+  `pc_scaler`-scaled scores `make_df_for_biplot` produces for the biplot,
+  since that scaling would distort each component's variance-proportional
+  range before clustering on it).
 - `app/src/plotting.py` — all Plotly figure builders (`make_map`, `make_fig_pca`,
-  `make_fig_pmap`). Untouched by the mapping refactor — see "Explicit column mapping"
-  below for why.
+  `make_fig_pmap`). Mostly untouched by the mapping refactor — see "Explicit column
+  mapping" below for why — but `make_fig_pca` does take an arbitrary `x_col`/`y_col`
+  component pair (not hardcoded PC1/PC2) to support the selectable-PC biplot.
+  `make_base_scatter_plot` (shared by `make_fig_pca`/`make_fig_pmap`) wraps long
+  split-category legend labels (`"{loc_code} [{date_min}->{date_max}]"`) via
+  `_wrap_legend_label`, which exploits that fixed 2-token shape rather than doing
+  generic word-wrap: break at the loc_code/bracket space first, fall back to the `->`
+  (kept intact) only if the bracketed date range alone still doesn't fit, and never
+  fractures a `loc_code` or a single date token — an over-length line is preferred over
+  a mid-token break.
 - `app/src/session_manager.py` — Redis read/write helpers. Wired up and working from
   `app/app.py` (fixed during the hardening pass — see GOTCHAS for history).
 - `app/src/cache_initialize.py` — Flask-Caching key/hash helpers. `generate_df_hash_version`
@@ -107,6 +130,13 @@ No CI config in the repo — tests run locally/manually only.
   [docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md](docs/agent-context/CUSTOM-CATEGORY-COLOR-BUGS-HANDOFF.md).
   Verify changes via `PYTHONPATH=. pytest test/`, direct callback invocation, or reading
   the layout/diff — not by launching the server.
+  - If a headless smoke test of the running app is genuinely needed (and the user has
+    asked for one), never bind port 8050 — that's the user's own dev-server port and a
+    stray background process there causes exactly the stale-code confusion described
+    above. Use an ephemeral port (`port=0`, or a fixed high port like `8055` that isn't
+    8050/8080) and wrap the server start/`app.run`/thread or process lifetime in a
+    `try...finally` so it's guaranteed to shut down even if the smoke test assertion
+    fails — don't leave it running in the background for a later call to check.
 
 - `app/requirements.txt` is **UTF-16LE encoded**. If `pip install -r requirements.txt`
   misbehaves, check encoding before debugging anything else.
@@ -153,13 +183,17 @@ No CI config in the repo — tests run locally/manually only.
 - Touching PCA/PaCMAP performance? Flask-Caching is scaffolded but not wired up (see
   GOTCHAS) — don't assume caching exists.
 - Touching column mapping/validation? Read
-  [docs/agent-context/REFACTOR-HANDOFF.md](docs/agent-context/REFACTOR-HANDOFF.md)
-  first for the design decisions already made (required vs. optional roles, what blocks
-  vs. warns, why lat/lon get renamed) before changing `data_model.py`/`data_mapping.py`.
+  [docs/agent-context/codebase-map.md](docs/agent-context/codebase-map.md)'s CSV-upload
+  workflow section first for the design decisions already made (required vs. optional
+  roles, what blocks vs. warns, why lat/lon get renamed) before changing
+  `data_model.py`/`data_mapping.py`.
 - Touching date handling? Per-row coercion + graceful degradation now lives in
   `data_mapping._coerce_date` — the old whole-column `datetime.now()` corruption
   fallback is gone (see GOTCHAS for the pre-refactor history if you need context).
 - Touching `plotting.py`? It's deliberately untouched by the column-mapping refactor —
   confirm with the user before changing its hardcoded `LATITUDE`/`LONGITUDE`/
-  `MAP-MARKER-SIZE`/`PC1`/`PC2`/`PMAP1`/`PMAP2`/`metals` expectations, since the mapping
-  layer was specifically designed to satisfy them without edits here.
+  `MAP-MARKER-SIZE`/`PMAP1`/`PMAP2`/`metals` expectations, since the mapping layer was
+  specifically designed to satisfy them without edits here. `PC1`/`PC2` are no longer
+  hardcoded there - `make_fig_pca`/`DataPlotter.plot_pca` take an explicit `x_col`/`y_col`
+  component pair (selectable-PC biplot feature) - so this exception doesn't apply to PCA
+  axis selection.

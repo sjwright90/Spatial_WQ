@@ -3,7 +3,7 @@
 ## Orientation
 A single-page Plotly Dash web app for exploring water-quality lab data spatially. Users upload a CSV, map its columns to semantic roles (location ID, latitude/longitude, analytes, date, plotting groups, etc.) via an in-app modal, and the app maps sample locations, runs PCA and PaCMAP dimensionality reduction on selected analytes/locations, and renders linked map + biplot views. Sessions (uploaded/derived data) can optionally be persisted to Redis, keyed by a user-entered "session ID" and a named key, with a 1-week TTL. Deployment target is Docker Compose behind nginx with Let's Encrypt/certbot, run via gunicorn; there's also a Waitress-based desktop-launch entry point (`server.py`). Repo root README (`README.md`) is just a UTF-16 title stub ("# Spatial_WQ") — no real docs exist there.
 
-**As of the `refactor/declarative-data-model` branch**, CSV ingestion is driven by an explicit, user-supplied column-to-role mapping rather than regex-matched column-name prefixes — see [Workflow 1](#1-csv-upload---column-mapping---validation---session-bootstrap) and `docs/agent-context/REFACTOR-HANDOFF.md` for the full rationale/design record.
+**As of the `refactor/declarative-data-model` branch**, CSV ingestion is driven by an explicit, user-supplied column-to-role mapping rather than regex-matched column-name prefixes — see [Workflow 1](#1-csv-upload---column-mapping---validation---session-bootstrap) below for the full rationale/design record.
 
 ## Entry Points & Execution Flow
 Two independent ways to run the same Dash `server`/`app` object defined in `app/app.py`:
@@ -39,6 +39,7 @@ All three entry points converge on the same Dash app/layout built in `app/app.py
 │       ├── data_process.py               # column-reshaping/color-dict/coordinate-extraction helpers, JSON<->pandas (de)serialization (regex column classifiers removed - see below)
 │       ├── compositional_data_functions.py # CLR (centered log-ratio) transform + StandardScaler for compositional geochem data
 │       ├── dimension_reduction_functions.py # PCA + PaCMAP pipeline (process_dimension_reduction, run_pca, run_pmap)
+│       ├── clustering_functions.py       # NEW: KMeans auto-cluster pipeline (process_clustering) feeding the custom-group draft; clusters on CLR or unscaled-PCA feature space of the currently-applied analytes/locations
 │       ├── plotting.py                   # Plotly figure builders: make_map (mapbox), make_fig_pca, make_fig_pmap, empty_fig
 │       ├── cache_initialize.py           # Flask-Caching cache-key builder + dataframe content hashing (md5 of hash_pandas_object)
 │       ├── session_manager.py            # Redis read/write helpers (save_to_redis/load_from_redis/list_keys/...)
@@ -50,6 +51,7 @@ All three entry points converge on the same Dash app/layout built in `app/app.py
         ├── test_data_manager.py
         ├── test_data_process.py
         ├── test_compositional_data_functions.py
+        ├── test_clustering_functions.py  # NEW
         ├── test_plotting.py
         └── test_cache_initialize.py
 ```
@@ -81,7 +83,7 @@ Ingestion is now a **two-step, mapping-driven** flow (replaces the old single-sh
   - If `validation.has_errors`, `DataPreprocessor` leaves `df_master`/`cols_key_plot`/etc. as `None`; `confirm_mapping()` renders the issues as a list inside the modal and keeps it open.
   - On success, builds coordinate table (`extract_coordinate_dataframe`, now takes an optional `col_marker_size` and synthesizes a constant `MAP-MARKER-SIZE` column when unmapped), marker-symbol dict (defaults every location to `"circle"` when no marker role is mapped, since `plotting.py` indexes this dict directly with no `.get()` fallback), and per-plot-group color dict (`make_plotting_group_color_dicts`, driven by `mapping.group_colors` instead of a regex/format flag).
 - `DataPreprocessor.get_session_dict()` (`app/src/data_manager.py`) packages everything into the shape stored in the `session` `dcc.Store`, including default dropdown values for downstream callbacks — **this output shape is unchanged from before the refactor**, which is why `app.py`'s dropdown/map/plot callbacks and `DataPlotter` needed minimal edits.
-- Required roles that block upload with an error: location ID, latitude, longitude, ≥1 numeric analyte (simple or CLR), ≥1 plotting group. Optional roles (date, marker symbol, marker size, group colors) degrade gracefully with a warning instead of blocking — see `docs/agent-context/REFACTOR-HANDOFF.md` for the full list of validation rules.
+- Required roles that block upload with an error: location ID, latitude, longitude, ≥1 numeric analyte (simple or CLR), ≥1 plotting group. Optional roles (date, marker symbol, marker size, group colors) degrade gracefully with a warning instead of blocking — see `app/src/data_model.py`'s `ROLE_REGISTRY` and `app/src/data_mapping.py`'s `build_mapped_dataset()` for the authoritative validation rules.
 
 ### 2. Dimension reduction ("Apply" button) -> PCA/PaCMAP -> plots
 - `process_working_data()` (`app/app.py:499-546`, decorated with `@callback_prevent_initial_output` from `app/src/callbacks.py`) fires on `apply-button` clicks.
@@ -137,8 +139,8 @@ Ingestion is now a **two-step, mapping-driven** flow (replaces the old single-sh
 - **`make_map`'s color-column handling is destructive**: `df.rename(columns={_col_group_id: "."}, inplace=True)` (`app/src/plotting.py:69`) renames the caller's dataframe column in place to `"."` before plotting — the input `df_coords` object from `update_map` (`app/app.py`) is mutated as a side effect of a supposedly pure "make figure" function. `plotting.py` also hardcodes literal `LATITUDE`/`LONGITUDE` column reads with no override kwarg — the mapping layer (`data_mapping.build_mapped_dataset`) works around this by renaming the user's chosen lat/lon columns to those literal names rather than touching `plotting.py`.
 - **`server.py` is excluded from the Docker image** (`.dockerignore:7`) — confirms the Docker deployment path only ever uses gunicorn/`app:server`, so `server.py`'s browser-launch behavior is dev/desktop-only, but this isn't documented anywhere.
 - Two different "session ID" concepts are conflated in the UI copy vs code: the sidebar text input `user-session-id` is described as "Enter your user ID" but is used directly as the Redis hash key namespace (`session:{session_id}`) — i.e., it's a shared namespace with no auth.
-- **No end-to-end browser verification of the new upload -> mapping-modal -> confirm -> map/PCA/PaCMAP flow has been done yet** (as of the refactor commit) — the automated test suite and a Python-level import smoke test have been run, but not a real click-through. See `docs/agent-context/REFACTOR-HANDOFF.md`.
-- **Mapping is one-time per upload, not persisted** — there is no way to save/reuse a `ColumnMapping` across uploads of the same recurring data source (explicitly deferred, see REFACTOR-HANDOFF.md). Redis, if fixed, would be the natural place to persist mapping profiles.
+- **No end-to-end browser verification of the new upload -> mapping-modal -> confirm -> map/PCA/PaCMAP flow has been done yet** (as of the refactor commit) — the automated test suite and a Python-level import smoke test have been run, but not a real click-through.
+- **Mapping is one-time per upload, not persisted** — there is no way to save/reuse a `ColumnMapping` across uploads of the same recurring data source (explicitly deferred as an out-of-scope decision during the declarative-data-model refactor). Redis, if fixed, would be the natural place to persist mapping profiles.
 
 ## Open Questions
 - Does the Docker build currently succeed given the UTF-16 `requirements.txt`? Not tested in this session.

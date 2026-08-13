@@ -178,6 +178,42 @@ def _format_date_range(df: pd.DataFrame, date_col: Optional[str]) -> str:
     return f"{date_min.date()}->{date_max.date()}"
 
 
+def _wrap_legend_label(label: str, max_len: int = 20) -> str:
+    """Insert <br> breaks into a split-category legend label
+    ("{loc_code} [{date_min}->{date_max}]" or "{loc_code} [{date}]", see
+    make_base_scatter_plot/_format_date_range) so no visual line exceeds
+    `max_len` chars - Plotly legend text is interpreted as pseudo-HTML, so
+    this is the only way to force a wrap (entrywidth/entrywidthmode
+    truncates, it doesn't wrap).
+
+    Exploits the label's fixed 2-token shape rather than generic word-wrap:
+    only two break points are ever considered, in priority order -
+    (1) the space between loc_code and the bracketed date range, then
+    (2) the "->" between date_min/date_max, kept intact and attached to
+    the end of the first line. Never fractures a token (loc_code or a
+    single date) - if a token alone still exceeds max_len, that line is
+    left long rather than hard-split, since a mid-token break (e.g.
+    "20<br>22->2024") is worse than one over-length line."""
+    if len(label) <= max_len:
+        return label
+    if " [" not in label or not label.endswith("]"):
+        # Doesn't match the expected "{loc_code} [...]" shape - no safe
+        # break point to exploit, leave unwrapped rather than guess.
+        return label
+    loc_code, rest = label.split(" [", 1)
+    date_part = rest[:-1]  # strip trailing "]"
+    bracket_part = f"[{date_part}]"
+    if len(bracket_part) <= max_len:
+        return f"{loc_code}<br>{bracket_part}"
+    if "->" in date_part:
+        date_min, date_max = date_part.split("->", 1)
+        return f"{loc_code}<br>[{date_min}-><br>{date_max}]"
+    # Single date, no "->" to break on - can't split further without
+    # fracturing the date token, leave the bracketed part on its own long
+    # line.
+    return f"{loc_code}<br>{bracket_part}"
+
+
 def _generate_text(
     site: str,
     df: pd.DataFrame,
@@ -268,7 +304,9 @@ def make_base_scatter_plot(
                 & (group_df[ctx.col_secondary_domain] == secondary_value)
             ]
             trace_name = (
-                f"{loc_code} [{_format_date_range(sub_df, ctx.col_date)}]"
+                _wrap_legend_label(
+                    f"{loc_code} [{_format_date_range(sub_df, ctx.col_date)}]"
+                )
                 if split_by_category
                 else loc_code
             )
@@ -382,6 +420,20 @@ def make_fig_pmap(
     return plotly_fig
 
 
+def _component_explained_variance(col_name: str, expl_var: List[float], prefix: str = "PC") -> float:
+    """`expl_var[n-1]` for a `"{prefix}{n}"` column name (e.g. "PC3" -> index 2),
+    so the axis label always reports the variance for whichever component is
+    actually plotted on that axis - not just PC1/PC2."""
+    try:
+        idx = int(col_name[len(prefix):]) - 1
+        return expl_var[idx]
+    except (ValueError, IndexError):
+        logger.warning(
+            "Could not resolve explained variance for column %r; defaulting to 0", col_name
+        )
+        return 0.0
+
+
 def make_fig_pca(
     df_pca: pd.DataFrame,
     ldg_df: pd.DataFrame,
@@ -392,14 +444,15 @@ def make_fig_pca(
     col_metal: str = "metals",
 ) -> go.Figure:
     """PCA biplot (PC1/PC2 columns by default + loading-vector annotations)
-    for the current plot groups."""
+    for the current plot groups. x_col/y_col select which computed
+    components to plot (e.g. "PC1"/"PC3")."""
     plotly_fig = make_base_scatter_plot(
         df=df_pca,
         ctx=ctx,
         x_col=x_col,
         y_col=y_col,
-        x_label=f"{x_col} ({expl_var[0]*100:.2f}%)",
-        y_label=f"{y_col} ({expl_var[1]*100:.2f}%)",
+        x_label=f"{x_col} ({_component_explained_variance(x_col, expl_var)*100:.2f}%)",
+        y_label=f"{y_col} ({_component_explained_variance(y_col, expl_var)*100:.2f}%)",
     )
 
     plotly_fig = _annotate_loadings(ldg_df, plotly_fig, x_col, y_col, col_metal)

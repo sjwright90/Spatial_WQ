@@ -15,6 +15,7 @@ from app.src.plotting import (
     make_fig_pca,
     _DEFAULT_COLOR,
     _DEFAULT_MARKER_SYMBOL,
+    _wrap_legend_label,
 )
 
 
@@ -77,6 +78,46 @@ class TestPlottingFunctions(unittest.TestCase):
         self.assertAlmostEqual(x_max, 2.1)
         self.assertAlmostEqual(y_min, 2.9)
         self.assertAlmostEqual(y_max, 4.1)
+
+    def test_wrap_legend_label_breaks_at_space_when_bracket_part_fits(self):
+        label = "SITE-01 [2023-06-15]"
+        wrapped = _wrap_legend_label(label, max_len=15)
+        self.assertEqual(wrapped, "SITE-01<br>[2023-06-15]")
+
+    def test_wrap_legend_label_falls_back_to_arrow_break(self):
+        label = "SITE-01 [2023-01-01->2023-06-15]"
+        wrapped = _wrap_legend_label(label, max_len=20)
+        self.assertEqual(wrapped, "SITE-01<br>[2023-01-01-><br>2023-06-15]")
+        # "->" stays intact, attached to the end of the first line - never
+        # split into "-" and ">" on separate lines.
+        self.assertIn("->", wrapped.split("<br>")[1])
+
+    def test_wrap_legend_label_never_fractures_a_token(self):
+        # loc_code alone exceeds max_len - left intact on its own
+        # (over-length) line rather than hard-split mid-token.
+        label = "VERY-LONG-LOCATION-ID-0001 [2023-01-01->2023-06-15]"
+        wrapped = _wrap_legend_label(label, max_len=20)
+        lines = wrapped.split("<br>")
+        self.assertEqual(lines[0], "VERY-LONG-LOCATION-ID-0001")
+        for line in lines:
+            self.assertNotIn(" ", line.strip())  # no stray mid-token breaks
+
+    def test_wrap_legend_label_single_date_no_arrow_left_unbroken(self):
+        # No "->" to break on if start/end date collapse to one date
+        # (_format_date_range's single-date case) - can't split further
+        # without fracturing the date, so the bracket part stays on one
+        # (possibly over-length) line.
+        label = "SITE-01 [2023-06-15]"
+        wrapped = _wrap_legend_label(label, max_len=10)
+        self.assertEqual(wrapped, "SITE-01<br>[2023-06-15]")
+
+    def test_wrap_legend_label_short_label_unchanged(self):
+        label = "Site1"
+        self.assertEqual(_wrap_legend_label(label, max_len=20), label)
+
+    def test_wrap_legend_label_unrecognized_shape_unchanged(self):
+        label = "not-a-legend-label-shape"
+        self.assertEqual(_wrap_legend_label(label, max_len=10), label)
 
     def test_generate_text(self):
         texts = _generate_text("Site1", self.df, "PrimaryDomain", "SecondaryDomain", "Date")
@@ -234,6 +275,27 @@ class TestPlottingFunctions(unittest.TestCase):
             ctx=self._make_ctx(),
         )
         self.assertIsInstance(fig, Figure)
+
+    def test_make_fig_pca_selectable_component_pair(self):
+        # PC1 vs PC3 (not the PC1/PC2 default) must plot the right columns
+        # and label each axis with *its own* component's explained variance,
+        # not always expl_var[0]/[1].
+        df = self.df.copy()
+        df["PC3"] = [1.1, 1.3]
+        ldg_df = self.ldg_df.copy()
+        ldg_df["PC3"] = [0.5, 0.6]
+        expl_var = [0.6, 0.3, 0.1]
+        fig = make_fig_pca(
+            df_pca=df,
+            ldg_df=ldg_df,
+            expl_var=expl_var,
+            ctx=self._make_ctx(),
+            x_col="PC1",
+            y_col="PC3",
+        )
+        self.assertIn("10.00%", fig.layout.yaxis.title.text)
+        self.assertIn("PC3", fig.layout.yaxis.title.text)
+        self.assertTrue(all(trace.y[0] in df["PC3"].values for trace in fig.data))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # %%
 import base64
 import io
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import dash
 from dash.dependencies import ALL, Input, Output, State
@@ -23,10 +23,12 @@ from src.data_process import (
     merge_color_overrides,
     build_color_mapping_export_df,
     build_custom_group_export_df,
+    subset_df_dateRange,
 )
 
 # from src.compositional_data_functions import clr_transform_scale
 from src.dimension_reduction_functions import process_dimension_reduction
+from src.clustering_functions import process_clustering
 from src.callbacks import callback_prevent_initial_output
 from src.logging_config import configure_logging, get_logger
 from src.error_handling import log_and_prevent_update, log_and_surface_error
@@ -442,6 +444,130 @@ def update_date_range_slider(
     return date_min, date_max, marks, [date_min, date_max]
 
 
+def _get_date_filter_bounds(session: Dict[str, Any]) -> Optional[List[str]]:
+    """Derive the mapped date column's actual [min, max] (as ISO date
+    strings) from an already-`load_store`'d session dict, or None if no date
+    column is mapped. Shared by update_date_filter_picker and
+    update_date_filter_indicator so both always agree on the true bounds -
+    neither depends on date-filter-bounds-store having already been written
+    by the other callback, which Dash gives no ordering guarantee on since
+    both fire independently off Input("session", "data")."""
+    col_date = session["meta_data"]["cols_key_meta"]["date"]
+    if not col_date:
+        return None
+    df_master = json_to_pandas(session, "df_master", col_date)
+    date_min = str(df_master[col_date].min().date())
+    date_max = str(df_master[col_date].max().date())
+    return [date_min, date_max]
+
+
+# GENERATE UPSTREAM DATE-FILTER PICKER BOUNDS (distinct from the date-range
+# "Mask" slider above, which only trims already-computed plot output)
+@app.callback(
+    Output("date-filter-bounds-store", "data"),
+    Output("date-filter-start-picker", "date"),
+    Output("date-filter-end-picker", "date"),
+    Output("date-filter-start-picker", "disabled"),
+    Output("date-filter-end-picker", "disabled"),
+    Output("date-filter-hint", "children"),
+    Input("session", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update(
+    "app.callbacks.session", fallback=(None, None, None, True, True, "")
+)
+def update_date_filter_picker(session: Optional[str]) -> tuple:
+    """Rebuild the upstream date-Filter's available range from the mapped
+    date column, restoring the last-Applied filter range from
+    session["plotting_data"]["date_filter_range_dropdown_value"] if present
+    (mirrors how feature/loc-id dropdowns restore their last-Applied value),
+    else defaulting to the full range (no filter). The data's actual min/max
+    is stashed in date-filter-bounds-store (for Reset) and shown as a hint,
+    but not enforced as a hard constraint on the pickers - a typed/picked
+    date outside it is accepted rather than silently reverted."""
+    if session is None:
+        return None, None, None, True, True, ""
+    session = load_store(session)
+    bounds = _get_date_filter_bounds(session)
+    if bounds is None:
+        # No date column mapped - date filtering is disabled.
+        return None, None, None, True, True, ""
+    date_min, date_max = bounds
+    persisted = session["plotting_data"].get("date_filter_range_dropdown_value")
+    if persisted:
+        start_date, end_date = persisted
+    else:
+        start_date, end_date = date_min, date_max
+    hint = f"Data available: {date_min} to {date_max}"
+    return bounds, start_date, end_date, False, False, hint
+
+
+# RESET DATE FILTER TO FULL RANGE
+@app.callback(
+    Output("date-filter-start-picker", "date", allow_duplicate=True),
+    Output("date-filter-end-picker", "date", allow_duplicate=True),
+    Input("date-filter-reset-button", "n_clicks"),
+    State("date-filter-bounds-store", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.session", fallback=(dash.no_update, dash.no_update))
+def reset_date_filter(n_clicks: Optional[int], bounds: Optional[list]) -> tuple:
+    """Reset the upstream date Filter to the full available range (no filtering)."""
+    if not bounds:
+        return dash.no_update, dash.no_update
+    date_min, date_max = bounds
+    return date_min, date_max
+
+
+# DATE-FILTER "PENDING"/"ACTIVE" INDICATOR
+@app.callback(
+    Output("date-filter-indicator", "children"),
+    Input("date-filter-start-picker", "date"),
+    Input("date-filter-end-picker", "date"),
+    Input("session", "data"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.session", fallback="")
+def update_date_filter_indicator(
+    start_date: Optional[str],
+    end_date: Optional[str],
+    session: Optional[str],
+) -> Union[str, dbc.Badge]:
+    """Show "Date filter pending" when the live pickers differ from what's
+    actually Applied (session["plotting_data"]["date_filter_range_dropdown_value"]),
+    or "Date filter active" once a narrower-than-full range has been Applied
+    and the pickers still match it. Session is watched (not just the picker
+    props) so the badge actually flips right after clicking Apply, rather
+    than only reacting to further picker edits. Bounds are derived directly
+    from `session` via `_get_date_filter_bounds` (same helper
+    update_date_filter_picker uses) rather than read from
+    date-filter-bounds-store, since Dash gives no ordering guarantee between
+    the two callbacks that both fire off Input("session", "data")."""
+    if not start_date or not end_date or session is None:
+        return ""
+    session = load_store(session)
+    bounds = _get_date_filter_bounds(session)
+    if bounds is None:
+        return ""
+    date_min, date_max = bounds
+    applied = session["plotting_data"].get("date_filter_range_dropdown_value")
+    applied_start, applied_end = applied if applied else (date_min, date_max)
+
+    if [start_date, end_date] != [applied_start, applied_end]:
+        return dbc.Badge(
+            f"Date filter pending: {start_date} to {end_date} - click Apply to use it",
+            color="warning",
+            className="mb-2",
+        )
+    if applied and (applied_start > date_min or applied_end < date_max):
+        return dbc.Badge(
+            f"Date filter active: {applied_start} to {applied_end}",
+            color="success",
+            className="mb-2",
+        )
+    return ""
+
+
 # GENERATE DROPDOWNS FOR GROUPS
 @app.callback(
     [
@@ -777,6 +903,8 @@ def store_map_relayout_data(relayoutData: Optional[dict]) -> Any:
         State("map-group-dropdown", "value"),
         State("plot-group-dropdown-1", "value"),
         State("plot-group-dropdown-2", "value"),
+        State("date-filter-start-picker", "date"),
+        State("date-filter-end-picker", "date"),
     ],
     prevent_initial_call=True,
 )
@@ -790,6 +918,8 @@ def process_working_data(
     map_group: Optional[str],
     plot_group_1: Optional[str],
     plot_group_2: Optional[str],
+    date_filter_start: Optional[str],
+    date_filter_end: Optional[str],
 ) -> Tuple[Optional[str], Any]:
     """Run PCA/PaCMAP on the selected analytes/locations and store the results."""
     if session is None:
@@ -813,6 +943,10 @@ def process_working_data(
     cols_numeric_simple = meta_data["cols_key_plot"]["numeric_simple"]
     cols_numeric_clr = meta_data["cols_key_plot"]["numeric_clr"]
     col_loc_id = meta_data["cols_key_meta"]["loc_id"]
+    col_date = meta_data["cols_key_meta"]["date"]
+    date_filter_range = (
+        [date_filter_start, date_filter_end] if date_filter_start and date_filter_end else None
+    )
     plot_components_pca, plot_components_pmap = process_dimension_reduction(
         df_master,
         col_loc_id,
@@ -822,6 +956,8 @@ def process_working_data(
         feature_selection,
         loc_id_selection,
         n_neighbors,
+        col_date=col_date,
+        date_range=date_filter_range,
     )
 
     dict_working_data = SessionManager.package_plotting_data(
@@ -831,6 +967,7 @@ def process_working_data(
     dct_plotting_data = {
         "feature_selection_dropdown_value": feature_selection,
         "loc_id_dropdown_value": loc_id_selection,
+        "date_filter_range_dropdown_value": date_filter_range,
         "map_group_dropdown_value": map_group,
         "plot_group_dropdown_1_value": plot_group_1,
         "plot_group_dropdown_2_value": plot_group_2,
@@ -838,6 +975,42 @@ def process_working_data(
     }
     session["plotting_data"].update(dct_plotting_data)
     return dump_store(dict_working_data), dump_store(session)
+
+
+# populate the PCA X/Y component dropdowns from however many PCs were computed
+@app.callback(
+    Output("pca-x-component", "options"),
+    Output("pca-x-component", "value"),
+    Output("pca-y-component", "options"),
+    Output("pca-y-component", "value"),
+    Input("working-data", "data"),
+    State("pca-x-component", "value"),
+    State("pca-y-component", "value"),
+    prevent_initial_call=True,
+)
+@log_and_prevent_update("app.callbacks.plotting", fallback=([], "PC1", [], "PC2"))
+def update_pca_component_dropdowns(
+    working_data: Optional[str],
+    current_x: Optional[str],
+    current_y: Optional[str],
+) -> tuple:
+    """Repopulate the PCA X/Y axis dropdowns whenever working-data is
+    rebuilt, from however many components `process_dimension_reduction`
+    actually computed. Keeps the user's current selection if it's still
+    valid (e.g. re-running with the same analytes), otherwise falls back to
+    PC1/PC2."""
+    if working_data is None:
+        raise PreventUpdate
+    working_data = load_store(working_data)
+    ldg_df = pd.read_json(io.StringIO(working_data["ldg_df"]))
+    components = sorted(
+        (c for c in ldg_df.columns if c != "metals"), key=lambda c: int(c[2:])
+    )
+    options = [{"label": c, "value": c} for c in components]
+    x_value = current_x if current_x in components else components[0]
+    y_default = components[1] if len(components) > 1 else components[0]
+    y_value = current_y if current_y in components else y_default
+    return options, x_value, options, y_value
 
 
 # grab the selected data from the map and update the loc_id-dropdown
@@ -917,6 +1090,11 @@ def open_blank_custom_group_modal(
     meta_data = session["meta_data"]
     cols_key_meta = meta_data["cols_key_meta"]
     df_master = json_to_pandas(session, "df_master", cols_key_meta["date"])
+    # Restrict to the last-Applied date Filter, same as process_dimension_reduction/
+    # process_clustering, so a manual assignment can never target an entity the
+    # Filter excluded (see design decision on export-marker precedence).
+    date_filter_range = session["plotting_data"].get("date_filter_range_dropdown_value")
+    df_master = subset_df_dateRange(df_master, cols_key_meta["date"], date_filter_range)
     options = _build_entity_dropdown_options(
         df_master, cols_key_meta["loc_id"], cols_key_meta["entity_id"], cols_key_meta["date"]
     )
@@ -972,6 +1150,12 @@ def populate_custom_group_from_selection(
     entity_id_col = cols_key_meta["entity_id"]
     date_col = cols_key_meta["date"]
     df_master = json_to_pandas(session, "df_master", date_col)
+    # Restrict to the last-Applied date Filter (see open_blank_custom_group_modal) -
+    # a lasso selection may visually include Filter-excluded points (the map/plots
+    # aren't Filter-aware), but they silently drop out of df_master here and so
+    # can never be assigned to a category.
+    date_filter_range = session["plotting_data"].get("date_filter_range_dropdown_value")
+    df_master = subset_df_dateRange(df_master, date_col, date_filter_range)
 
     selected_entity_ids: List[str] = []
     if map_selected:
@@ -1094,6 +1278,93 @@ def finalize_custom_group(
     return dump_store(session), dump_store(session["meta_data"]), False, {}, alert
 
 
+# CUSTOM GROUP: auto-generate categories via KMeans clustering, straight into the draft
+@app.callback(
+    Output("custom-group-modal", "is_open", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "options", allow_duplicate=True),
+    Output("custom-group-assign-entity-dropdown", "value", allow_duplicate=True),
+    Output("custom-group-draft", "data", allow_duplicate=True),
+    Output("custom-group-categories-preview", "children", allow_duplicate=True),
+    Output("global-alert-container", "children", allow_duplicate=True),
+    Input("run-clustering-button", "n_clicks"),
+    State("cluster-feature-space", "value"),
+    State("cluster-n-clusters", "value"),
+    State("session", "data"),
+    prevent_initial_call=True,
+)
+@log_and_surface_error(
+    "app.callbacks.custom_group",
+    error_output_index=5,
+    fallback=(dash.no_update,) * 5,
+)
+def run_clustering_into_draft(
+    n_clicks: Optional[int],
+    feature_space: Optional[str],
+    n_clusters: Optional[int],
+    session: Optional[str],
+) -> tuple:
+    """Run KMeans on the analytes/locations currently applied to the
+    PCA/PaCMAP plots and write the resulting clusters straight into the
+    custom-group-draft as `{"Cluster 0": [entity_id, ...], ...}`, replacing
+    any existing draft - this is a distinct "auto-generate a group" action
+    from the manual lasso-select workflow, not an incremental addition to it.
+    The user still reviews/renames the categories (and can rename the group
+    column itself) before hitting Finalize, same as the manual flow.
+    """
+    if session is None:
+        raise PreventUpdate
+
+    session = load_store(session)
+    meta_data = session["meta_data"]
+    cols_key_meta = meta_data["cols_key_meta"]
+    cols_key_plot = meta_data["cols_key_plot"]
+    entity_id_col = cols_key_meta["entity_id"]
+    date_col = cols_key_meta["date"]
+    df_master = json_to_pandas(session, "df_master", date_col)
+
+    # Same analytes/locations/date-Filter last applied to the PCA/PaCMAP
+    # plots (not necessarily whatever the dropdowns/picker are currently
+    # showing if the user hasn't hit Apply since changing them) - see
+    # plotting_data.
+    plotting_data = session["plotting_data"]
+    feature_selection = plotting_data.get("feature_selection_dropdown_value") or []
+    loc_id_selection = plotting_data.get("loc_id_dropdown_value") or []
+    date_filter_range = plotting_data.get("date_filter_range_dropdown_value")
+
+    df_clusters = process_clustering(
+        df_master,
+        cols_key_meta["loc_id"],
+        entity_id_col,
+        cols_key_plot["numeric_simple"],
+        cols_key_plot["numeric_clr"],
+        feature_selection,
+        loc_id_selection,
+        feature_space,
+        n_clusters,
+        col_date=date_col,
+        date_range=date_filter_range,
+    )
+    assignments = {
+        f"Cluster {label}": group[entity_id_col].tolist()
+        for label, group in df_clusters.groupby("cluster")
+    }
+
+    # Entity dropdown for any further manual adjustment in this same modal
+    # session should also only offer Filter-included entities.
+    df_master_filtered = subset_df_dateRange(df_master, date_col, date_filter_range)
+    options = _build_entity_dropdown_options(
+        df_master_filtered, cols_key_meta["loc_id"], entity_id_col, date_col
+    )
+    alert = dbc.Alert(
+        f"✅ Generated {len(assignments)} cluster(s) from {len(df_clusters)} sample(s) - "
+        "review/rename below, then Finish & Create Group.",
+        color="success",
+        dismissable=True,
+        duration=10000,
+    )
+    return True, options, [], assignments, _render_custom_group_preview(assignments), alert
+
+
 # CUSTOM GROUP: cancel out of the modal without creating anything
 @app.callback(
     Output("custom-group-modal", "is_open", allow_duplicate=True),
@@ -1157,12 +1428,14 @@ def download_custom_groups_csv(n_clicks: Optional[int], session: Optional[str]) 
         return dash.no_update
     cols_key_meta = meta_data["cols_key_meta"]
     df_master = json_to_pandas(session, "df_master", cols_key_meta["date"])
+    date_filter_range = session["plotting_data"].get("date_filter_range_dropdown_value")
     df_export = build_custom_group_export_df(
         df_master,
         cols_key_meta["entity_id"],
         cols_key_meta["loc_id"],
         cols_key_meta["date"],
         custom_group_columns,
+        date_filter_range=date_filter_range,
     )
     logger.info("Downloading custom groups CSV (%d rows)", len(df_export))
     return dcc.send_data_frame(df_export.to_csv, "custom_groups.csv", index=False)
@@ -1181,6 +1454,8 @@ def download_custom_groups_csv(n_clicks: Optional[int], session: Optional[str]) 
         Input("plot-group-dropdown-2", "value"),
         Input("date-range-slider", "value"),
         Input("custom-color-overrides", "data"),
+        Input("pca-x-component", "value"),
+        Input("pca-y-component", "value"),
     ],
     [
         State(component_id="meta-data", component_property="data"),
@@ -1196,6 +1471,8 @@ def plot_data(
     plot_group_2: Optional[str],
     date_range: Optional[List[int]],
     custom_color_overrides: Optional[str],
+    pca_x_component: Optional[str],
+    pca_y_component: Optional[str],
     meta_data: Optional[str],
     n_neighbors: Optional[int],
 ) -> Tuple[Any, Any]:
@@ -1218,7 +1495,9 @@ def plot_data(
         [plot_group_1, plot_group_2],
         date_range,
     )
-    fig_pca = data_plotter.plot_pca()
+    fig_pca = data_plotter.plot_pca(
+        x_col=pca_x_component or "PC1", y_col=pca_y_component or "PC2"
+    )
     fig_pmap = data_plotter.plot_pmap(n_neighbors=n_neighbors)
     return fig_pca, fig_pmap
 

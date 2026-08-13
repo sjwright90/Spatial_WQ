@@ -11,6 +11,7 @@ from .data_process import (
 )
 from .data_model import ColumnMapping
 from .data_mapping import build_mapped_dataset
+from .dimension_reduction_functions import MAX_PCA_COMPONENTS
 
 from .cache_initialize import generate_df_hash_version
 from .logging_config import get_logger
@@ -173,6 +174,7 @@ class DataPreprocessor:
                 "feature_selection_dropdown_value": numeric_all,
                 "loc_id_dropdown_options": self.loc_id_all,
                 "loc_id_dropdown_value": self.loc_id_all,
+                "date_filter_range_dropdown_value": None,  # upstream date Filter, see subset_df_dateRange
                 "map_group_dropdown_options": plotting_groups,
                 "map_group_dropdown_value": plotting_groups[0],
                 "plot_group_dropdown_1_options": plotting_groups,
@@ -327,13 +329,24 @@ class DataPlotter:
             n_neighbors,
         )
 
-    def plot_pca(self) -> Any:
-        """Render the PCA biplot figure for the current plot groups/selection."""
+    def pca_component_options(self) -> List[str]:
+        """Sorted list of computed PC column names (e.g. ["PC1", "PC2", "PC3"])
+        available to plot, driven by however many components
+        `process_dimension_reduction` actually computed - used to populate the
+        pca-x-component/pca-y-component dropdown options."""
+        cols = [c for c in self.ldg_df.columns if c != "metals"]
+        return sorted(cols, key=lambda c: int(c[2:]))
+
+    def plot_pca(self, x_col: str = "PC1", y_col: str = "PC2") -> Any:
+        """Render the PCA biplot figure for the current plot groups/selection.
+        x_col/y_col select which computed components to plot."""
         return make_fig_pca(
             self.df_plot_pca,
             self.ldg_df,
             self.expl_var,
             self._build_plot_context(),
+            x_col=x_col,
+            y_col=y_col,
         )
 
 
@@ -348,8 +361,7 @@ class SessionManager:
         "LATITUDE",
         "LONGITUDE",
         "MAP-MARKER-SIZE",
-        "PC1",
-        "PC2",
+        *(f"PC{i}" for i in range(1, MAX_PCA_COMPONENTS + 1)),
         "PMAP1",
         "PMAP2",
         ".",

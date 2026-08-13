@@ -2,10 +2,11 @@ from pandas import DataFrame
 from sklearn.decomposition import PCA
 import pacmap
 
-from typing import Tuple
+from typing import Optional, Sequence, Tuple
 
 from .data_process import (
     make_df_for_biplot,
+    subset_df_dateRange,
     subset_df_locIds,
     subset_df_numericFeatures,
 )
@@ -15,7 +16,12 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
+MAX_PCA_COMPONENTS = 5
+
+
+def run_pca(
+    df: DataFrame, cat_cols: list, analytes: list, n_components: int = MAX_PCA_COMPONENTS
+) -> tuple:
     """
     Run PCA on a dataframe.
 
@@ -27,6 +33,11 @@ def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
         Categorical columns in df.
     analytes : list-like
         Analytes to run PCA on.
+    n_components : int, default MAX_PCA_COMPONENTS
+        Target number of components to compute. Capped at
+        min(n_components, n_analytes, n_samples) since PCA can't return more
+        components than that - selectable-PC-pair plotting (PC1 vs PC3, etc.)
+        needs more than 2 components available whenever the data supports it.
 
     Returns
     -----
@@ -37,11 +48,12 @@ def run_pca(df: DataFrame, cat_cols: list, analytes: list) -> tuple:
     expl_var
         Explained variance.
     """
+    n_components = max(1, min(n_components, len(analytes), len(df)))
     pca_obj, trns_df, ldg_df = pca_loading_matrix(
         df[analytes],
-        n_components=2,
+        n_components=n_components,
     )
-    df_plot = make_df_for_biplot(trns_df, df, col_list=cat_cols)
+    df_plot = make_df_for_biplot(trns_df, df, col_list=cat_cols, num_comp=n_components)
     expl_var = pca_obj.explained_variance_ratio_.tolist()
     return df_plot, ldg_df, expl_var
 
@@ -154,10 +166,12 @@ def process_dimension_reduction(
     feature_selection,
     loc_id_selection,
     n_neighbors,
+    col_date: Optional[str] = None,
+    date_range: Optional[Sequence[str]] = None,
 ) -> Tuple[Tuple[DataFrame, DataFrame, list], DataFrame]:
     """
-    Subset `df` to the selected locations/analytes, CLR+scale it, and run
-    both PCA and PaCMAP on the result.
+    Subset `df` to the selected date range/locations/analytes, CLR+scale it,
+    and run both PCA and PaCMAP on the result.
 
     Parameters
     ----------
@@ -177,6 +191,13 @@ def process_dimension_reduction(
         Subset of location IDs to include.
     n_neighbors : int
         PaCMAP neighbor count.
+    col_date : str, optional
+        Name of the mapped date column. Together with `date_range`, this is
+        the upstream date "Filter" - applied before PCA/PaCMAP so it actually
+        changes the computed variance/embedding, unlike the downstream,
+        display-only "Mask" in `DataPlotter.df_between_dates`.
+    date_range : list of str, optional
+        `[start_date, end_date]`, inclusive. No filtering applied if None.
 
     Returns
     -------
@@ -192,6 +213,7 @@ def process_dimension_reduction(
         logger.error("process_dimension_reduction called with empty feature_selection")
         raise ValueError("No analytes selected for dimension reduction")
 
+    df = subset_df_dateRange(df, col_date, date_range)
     df = subset_df_locIds(df, col_loc_id, loc_id_selection)
     df, cols_numeric_all, cols_numeric_clr = subset_df_numericFeatures(
         df, cols_numeric_simple, cols_numeric_clr, feature_selection

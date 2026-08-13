@@ -57,6 +57,53 @@ class TestAppImport(unittest.TestCase):
         self.assertTrue(callable(app_module.list_keys))
         self.assertTrue(callable(app_module.load_session_data))
 
+    def test_date_filter_callbacks_importable(self):
+        # The new upstream date-Filter callbacks (distinct from the existing
+        # downstream date-range-slider "Mask") must wire up cleanly.
+        app_module = _import_app_entrypoint()
+
+        self.assertTrue(callable(app_module.update_date_filter_picker))
+        self.assertTrue(callable(app_module.reset_date_filter))
+        self.assertTrue(callable(app_module.update_date_filter_indicator))
+
+
+class TestCustomGroupEntityPickerRespectsDateFilter(unittest.TestCase):
+    """The manual custom-group entity picker must only ever offer entities
+    within the last-Applied upstream date Filter - see the DATE-FILTERED
+    export-marker design decision in
+    docs/agent-context/02_NEXT-STEPS-DATETIMEFILTER-HANDOFF.md."""
+
+    def setUp(self):
+        self.app_module = _import_app_entrypoint()
+        import pandas as pd
+
+        self.df_master = pd.DataFrame(
+            {
+                "LOC_ID": ["Site1", "Site2", "Site3"],
+                "ENTITY_ID": ["e1", "e2", "e3"],
+                "Sample_Date": pd.to_datetime(["2020-01-01", "2020-06-01", "2023-01-01"]),
+            }
+        )
+
+    def test_filtered_entity_excluded_from_options(self):
+        filtered = self.app_module.subset_df_dateRange(
+            self.df_master, "Sample_Date", ["2020-01-01", "2020-12-31"]
+        )
+        options = self.app_module._build_entity_dropdown_options(
+            filtered, "LOC_ID", "ENTITY_ID", "Sample_Date"
+        )
+        option_values = {opt["value"] for opt in options}
+        self.assertEqual(option_values, {"e1", "e2"})
+        self.assertNotIn("e3", option_values)
+
+    def test_no_date_filter_offers_every_entity(self):
+        filtered = self.app_module.subset_df_dateRange(self.df_master, "Sample_Date", None)
+        options = self.app_module._build_entity_dropdown_options(
+            filtered, "LOC_ID", "ENTITY_ID", "Sample_Date"
+        )
+        option_values = {opt["value"] for opt in options}
+        self.assertEqual(option_values, {"e1", "e2", "e3"})
+
 
 class TestMapColorPatchPreservesRelayout(unittest.TestCase):
     """Regression tests for

@@ -14,11 +14,14 @@ from app.src.data_process import (
     build_custom_group_export_df,
     extract_coordinate_dataframe,
     subset_df_locIds,
+    subset_df_dateRange,
     subset_df_numericFeatures,
     pandas_to_json,
     json_to_pandas,
     pc_scaler,
     make_df_for_biplot,
+    DEFAULT_UNASSIGNED_CATEGORY,
+    LIGHT_GREY_COLOR,
 )
 
 
@@ -52,6 +55,18 @@ class TestDataProcess(unittest.TestCase):
         result = make_color_dict(self.df, "Group")
         self.assertIn("A", result)
         self.assertIn("B", result)
+
+    def test_make_color_dict_unassigned_always_light_grey(self):
+        # "Unassigned" sorts late alphabetically among these values, so
+        # without special-casing it would land on whatever palette color
+        # falls at that position rather than always being light grey.
+        df = self.df.copy()
+        df["Group"] = ["Unassigned", "Z-Category", "Unassigned"]
+        result = make_color_dict(df, "Group")
+        self.assertEqual(result[DEFAULT_UNASSIGNED_CATEGORY], LIGHT_GREY_COLOR)
+        # "Unassigned" is excluded from the palette-zip, so it doesn't
+        # consume/shift a slot other categories would otherwise get.
+        self.assertNotEqual(result["Z-Category"], LIGHT_GREY_COLOR)
 
     def test_find_make_color_dict_auto_palette(self):
         result = find_make_color_dict(self.df, "Group")
@@ -163,6 +178,50 @@ class TestDataProcess(unittest.TestCase):
         self.assertEqual(result.shape[0], 0)
         self.assertEqual(list(result.columns), ["ENTITY_ID", "LOCATION_ID", "DATE"])
 
+    def test_build_custom_group_export_df_no_date_filter_unchanged(self):
+        # date_filter_range=None (default) is a regression guard - identical
+        # to the pre-feature behavior.
+        df = self.df.copy()
+        df["CustomGroup"] = ["Unassigned", "Unassigned", "Unassigned"]
+        result = build_custom_group_export_df(
+            df, "EntityId", "Site_Name", "Sample_Date", ["CustomGroup"]
+        )
+        self.assertTrue((result["CustomGroup"] == "Unassigned").all())
+
+    def test_build_custom_group_export_df_marks_unassigned_out_of_range_rows(self):
+        # self.df's Sample_Date is 2023-01-01..2023-01-03; filter to just day 1.
+        df = self.df.copy()
+        df["CustomGroup"] = ["Unassigned", "Unassigned", "Unassigned"]
+        result = build_custom_group_export_df(
+            df,
+            "EntityId",
+            "Site_Name",
+            "Sample_Date",
+            ["CustomGroup"],
+            date_filter_range=["2023-01-01", "2023-01-01"],
+        )
+        values = result.set_index("ENTITY_ID")["CustomGroup"].to_dict()
+        self.assertEqual(values["e1"], "Unassigned")
+        self.assertEqual(values["e2"], "DATE-FILTERED-[2023-01-01->2023-01-01]")
+        self.assertEqual(values["e3"], "DATE-FILTERED-[2023-01-01->2023-01-01]")
+
+    def test_build_custom_group_export_df_preserves_preexisting_assignment_out_of_range(self):
+        # A real (non-default) assignment on an out-of-range row (e.g. from a
+        # group created under a wider/no Filter) must not be overwritten.
+        df = self.df.copy()
+        df["CustomGroup"] = ["Unassigned", "Cat1", "Unassigned"]
+        result = build_custom_group_export_df(
+            df,
+            "EntityId",
+            "Site_Name",
+            "Sample_Date",
+            ["CustomGroup"],
+            date_filter_range=["2023-01-01", "2023-01-01"],
+        )
+        values = result.set_index("ENTITY_ID")["CustomGroup"].to_dict()
+        self.assertEqual(values["e2"], "Cat1")
+        self.assertEqual(values["e3"], "DATE-FILTERED-[2023-01-01->2023-01-01]")
+
     def test_extract_coordinate_dataframe_with_marker_size_column(self):
         result = extract_coordinate_dataframe(
             self.df,
@@ -189,6 +248,27 @@ class TestDataProcess(unittest.TestCase):
     def test_subset_df_locIds(self):
         result = subset_df_locIds(self.df, "Site_Name", [1, 2])
         self.assertEqual(result.shape[0], 2)
+
+    def test_subset_df_dateRange_inclusive_range(self):
+        result = subset_df_dateRange(self.df, "Sample_Date", ["2023-01-01", "2023-01-02"])
+        self.assertEqual(sorted(result["EntityId"]), ["e1", "e2"])
+
+    def test_subset_df_dateRange_boundary_dates_included(self):
+        # Single-day range equal to a boundary date row should include just that row.
+        result = subset_df_dateRange(self.df, "Sample_Date", ["2023-01-03", "2023-01-03"])
+        self.assertEqual(list(result["EntityId"]), ["e3"])
+
+    def test_subset_df_dateRange_no_col_date_passthrough(self):
+        result = subset_df_dateRange(self.df, None, ["2023-01-01", "2023-01-02"])
+        self.assertEqual(result.shape[0], self.df.shape[0])
+
+    def test_subset_df_dateRange_no_date_range_passthrough(self):
+        result = subset_df_dateRange(self.df, "Sample_Date", None)
+        self.assertEqual(result.shape[0], self.df.shape[0])
+
+    def test_subset_df_dateRange_does_not_mutate_input(self):
+        subset_df_dateRange(self.df, "Sample_Date", ["2023-01-01", "2023-01-01"])
+        self.assertEqual(self.df.shape[0], 3)
 
     def test_subset_df_numericFeatures(self):
         result, cols_all, cols_clr = subset_df_numericFeatures(

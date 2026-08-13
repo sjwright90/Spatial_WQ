@@ -94,14 +94,38 @@ dropdown_plot_group_2 = html.Div(
     ]
 )
 
-check_list_plot_date = html.Div(
+# Upstream date "Filter" - subsets df_master before PCA/PaCMAP/clustering
+# run (unlike the downstream, display-only date-range-slider "Mask" below
+# apply_row, which only trims already-computed plot output). Two independent
+# DatePickerSingle boxes rather than one linked DatePickerRange - clearer at
+# the sidebar's narrow width, and each opens its calendar via with_portal
+# (a document-level overlay) so it isn't clipped/z-ordered behind the plots.
+# No min_date_allowed/max_date_allowed constraint is applied - typed/picked
+# dates outside the data's actual range are accepted rather than silently
+# reverted; date-filter-hint shows the actual available range instead.
+date_filter_picker = html.Div(
     [
-        html.H3("DATE GROUPING COMING SOON"),
-        dcc.Checklist(
-            id="date-checklist",
-            options=["Plot by Date"],
-            value=[],
-            style=CHECK_BOX_STYLE,
+        html.P("Select Date Filter Range (affects PCA/PaCMAP/clustering)"),
+        html.Div(id="date-filter-hint", className="text-muted", style={"font-size": "10px"}),
+        html.Label("Min Date", style={"display": "block"}),
+        dcc.DatePickerSingle(
+            id="date-filter-start-picker",
+            date=None,
+            disabled=True,
+            with_portal=True,
+        ),
+        html.Label("Max Date", style={"display": "block", "margin-top": "0.5rem"}),
+        dcc.DatePickerSingle(
+            id="date-filter-end-picker",
+            date=None,
+            disabled=True,
+            with_portal=True,
+        ),
+        dcc.Store(id="date-filter-bounds-store", data=None),
+        html.Button(
+            "Reset filter",
+            id="date-filter-reset-button",
+            style=BUTTON_STYLE,
         ),
     ]
 )
@@ -207,6 +231,49 @@ open_custom_group_button = html.Button(
 # whole point of this panel is that the user lassoes points on the map/plots
 # *while* it's open, repeatedly, to build up multiple categories, so it must
 # not block interaction with the rest of the page.
+cluster_feature_space_dropdown = dcc.Dropdown(
+    id="cluster-feature-space",
+    options=[
+        {"label": "CLR feature space (selected analytes)", "value": "clr"},
+        {"label": "PCA space (all computed components)", "value": "pca"},
+    ],
+    value="clr",
+    clearable=False,
+    style=DROPDOWN_UNI_STYLE,
+)
+
+cluster_n_clusters_input = dcc.Input(
+    id="cluster-n-clusters",
+    type="number",
+    min=2,
+    step=1,
+    value=3,
+    placeholder="Number of clusters",
+)
+
+run_clustering_button = html.Button(
+    "Run Clustering",
+    id="run-clustering-button",
+    style=BUTTON_STYLE,
+)
+
+auto_cluster_section = html.Div(
+    [
+        html.P(
+            "Auto-cluster (KMeans) - runs on the analytes/locations currently "
+            "applied ('Apply' button) to the PCA/PaCMAP plots. Writes the "
+            "resulting clusters below as categories, replacing any "
+            "categories already added - review/rename before finishing.",
+            style={"font-size": "0.85em"},
+        ),
+        html.Div(
+            [cluster_feature_space_dropdown, cluster_n_clusters_input, run_clustering_button],
+            className="d-flex flex-row align-items-end",
+            style={"gap": "8px"},
+        ),
+    ]
+)
+
 custom_group_modal = dbc.Offcanvas(
     [
         dcc.Input(
@@ -214,6 +281,8 @@ custom_group_modal = dbc.Offcanvas(
             type="text",
             placeholder="New group column name",
         ),
+        html.Hr(),
+        auto_cluster_section,
         html.Hr(),
         html.P(
             "Lasso/box-select points on the map or a biplot, then click "
@@ -278,7 +347,7 @@ sidebar = html.Div(
         dropdown_map_group,
         dropdown_plot_group_1,
         dropdown_plot_group_2,
-        check_list_plot_date,
+        date_filter_picker,
         html.Hr(),
         html.P("Custom categories & colors", className="lead"),
         open_color_picker_button,
@@ -427,6 +496,32 @@ dropdown_n_neighbers = html.Div(
     ]
 )
 
+dropdown_pca_x_component = html.Div(
+    [
+        html.P("PCA X axis"),
+        dcc.Dropdown(
+            id="pca-x-component",
+            options=[{"label": "PC1", "value": "PC1"}],
+            value="PC1",
+            clearable=False,
+            style=DROPDOWN_NUM_STYLE,
+        ),
+    ]
+)
+
+dropdown_pca_y_component = html.Div(
+    [
+        html.P("PCA Y axis"),
+        dcc.Dropdown(
+            id="pca-y-component",
+            options=[{"label": "PC2", "value": "PC2"}],
+            value="PC2",
+            clearable=False,
+            style=DROPDOWN_NUM_STYLE,
+        ),
+    ]
+)
+
 dropdown_loc_ids = html.Div(
     [
         html.P("Select Location IDs"),
@@ -453,15 +548,32 @@ dropdown_features = html.Div(
     ]
 )
 
-selector_div = html.Div(
+# Shows "Date filter pending" (warning) whenever the live start/end pickers
+# differ from what's actually Applied, or "Date filter active" (success) once
+# a narrower-than-full range has been Applied and the pickers still match it.
+# Stays visible even when the "Plot filters" sidebar holding the pickers
+# themselves is collapsed.
+date_filter_indicator = html.Div(id="date-filter-indicator", children=[])
+
+apply_row = html.Div(
     children=[
-        range_slider_date_filter,
         html.Button(
             "Apply",
             id="apply-button",
             style=BUTTON_STYLE,
         ),
         dropdown_n_neighbers,
+        dropdown_pca_x_component,
+        dropdown_pca_y_component,
+        date_filter_indicator,
+    ],
+    className="d-flex flex-row align-items-end",
+)
+
+selector_div = html.Div(
+    children=[
+        range_slider_date_filter,
+        apply_row,
         dropdown_loc_ids,
         dropdown_features,
     ],
